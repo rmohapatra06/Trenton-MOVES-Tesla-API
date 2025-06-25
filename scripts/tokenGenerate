@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# --- load secrets ---
+ENV_FILE="$HOME/Research 2025/Tesla Fleet API/tesla-fleet/fleet.env"
+if [[ -f $ENV_FILE ]]; then
+  # export all names found in the file
+  set -a            # automatically export every variable that gets set
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+else
+  echo "❌  Env file not found: $ENV_FILE" >&2
+  exit 1
+fi
+
+# Partner authentication token request
+
+curl --request POST \
+--header 'Content-Type: application/x-www-form-urlencoded' \
+--data-urlencode 'grant_type=client_credentials' \
+--data-urlencode "client_id=$CLIENT_ID" \
+--data-urlencode "client_secret=$CLIENT_SECRET" \
+--data-urlencode 'scope=openid vehicle_device_data vehicle_cmds vehicle_charging_cmds' \
+--data-urlencode "audience=$AUDIENCE" \
+'https://auth.tesla.com/oauth2/v3/token'

@@ -1,0 +1,1 @@
+https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=cb7b9694-fc1c-43c6-8285-6b9765c7215d&redirect_uri=https://major-charmed-parakeet.ngrok-free.app/extractToken&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=user_id=d46b5993-ffe4-42ef-8b95-88f5d38dba40

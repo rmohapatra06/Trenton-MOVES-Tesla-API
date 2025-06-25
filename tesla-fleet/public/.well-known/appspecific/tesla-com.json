@@ -1,0 +1,6 @@
+{
+  "name": "Tesla Fleet API Integration",
+  "description": "Tesla Fleet API integration for vehicle commands",
+  "public_key_file": "com.tesla.3p.public-key.pem",
+  "version": "1.0.0"
+} 
