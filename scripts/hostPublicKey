@@ -1,0 +1,14 @@
+# --- load secrets ---
+ENV_FILE="$HOME/Research 2025/Tesla Fleet API/tesla-fleet/fleet.env"
+if [[ -f $ENV_FILE ]]; then
+  # export all names found in the file
+  set -a            # automatically export every variable that gets set
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+else
+  echo "❌  Env file not found: $ENV_FILE" >&2
+  exit 1
+fi
+
+curl https://${NGROK_DOMAIN}/.well-known/appspecific/com.tesla.3p.public-key.pem

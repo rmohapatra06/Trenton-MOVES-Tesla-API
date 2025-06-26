@@ -16,11 +16,30 @@ fi
 
 # Partner authentication token request
 
-curl --request POST \
+TOKEN_RESPONSE=$(curl --silent --request POST \
 --header 'Content-Type: application/x-www-form-urlencoded' \
 --data-urlencode 'grant_type=client_credentials' \
 --data-urlencode "client_id=$CLIENT_ID" \
 --data-urlencode "client_secret=$CLIENT_SECRET" \
 --data-urlencode 'scope=openid vehicle_device_data vehicle_cmds vehicle_charging_cmds' \
 --data-urlencode "audience=$AUDIENCE" \
-'https://auth.tesla.com/oauth2/v3/token'
+'https://auth.tesla.com/oauth2/v3/token')
+
+echo "$TOKEN_RESPONSE"  # still print the response for your reference
+
+# Extract the access_token using jq
+ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+
+if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then
+  echo "❌ No access_token found in response."
+  exit 1
+fi
+
+# Update or add ACCESS_TOKEN in the env file
+if grep -q '^ACCESS_TOKEN=' "$ENV_FILE"; then
+  sed -i '' "s|^ACCESS_TOKEN=.*|ACCESS_TOKEN=${ACCESS_TOKEN}|" "$ENV_FILE"
+else
+  echo "ACCESS_TOKEN=${ACCESS_TOKEN}" >> "$ENV_FILE"
+fi
+
+echo "✅ ACCESS_TOKEN updated in $ENV_FILE"
