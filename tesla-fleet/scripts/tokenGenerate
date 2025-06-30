@@ -37,9 +37,9 @@ fi
 
 # Update or add ACCESS_TOKEN in the env file
 if grep -q '^ACCESS_TOKEN=' "$ENV_FILE"; then
-  sed -i '' "s|^ACCESS_TOKEN=.*|ACCESS_TOKEN=${ACCESS_TOKEN}|" "$ENV_FILE"
+  sed -i '' "s|^ACCESS_TOKEN=.*|ACCESS_TOKEN='${ACCESS_TOKEN}'|" "$ENV_FILE"
 else
-  echo "ACCESS_TOKEN=${ACCESS_TOKEN}" >> "$ENV_FILE"
+  echo "ACCESS_TOKEN='${ACCESS_TOKEN}'" >> "$ENV_FILE"
 fi
 
 echo "✅ ACCESS_TOKEN updated in $ENV_FILE"

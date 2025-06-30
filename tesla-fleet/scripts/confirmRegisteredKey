@@ -1,0 +1,52 @@
+#!/usr/bin/env node
+
+// Confirm Tesla Fleet API domain registration and fetch public key
+const fetch = require('node-fetch');
+const path = require('path');
+const fs = require('fs');
+require('dotenv').config({ path: path.resolve(__dirname, '../fleet.env') });
+
+const BASE_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
+const DOMAIN = process.env.NGROK_DOMAIN;
+const TOKEN =  process.env.ACCESS_TOKEN;
+
+if (!DOMAIN) {
+  console.error('❌ TESLA_DOMAIN, NGROK_DOMAIN, or DOMAIN env variable is not set.');
+  process.exit(1);
+}
+if (!TOKEN) {
+  console.error('❌ TESLA_AUTH_TOKEN or ACCESS_TOKEN env variable is not set.');
+  process.exit(1);
+}
+
+const url = `${BASE_URL}/api/1/partner_accounts/public_key?domain=${encodeURIComponent(DOMAIN)}`;
+
+const options = {
+  method: 'GET',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${TOKEN}`
+  }
+};
+
+console.log(`🔍 Checking registration for domain: ${DOMAIN}`);
+
+fetch(url, options)
+  .then(async res => {
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(`API error: ${res.status} ${res.statusText} - ${JSON.stringify(data)}`);
+    }
+    if (data && data.public_key) {
+      console.log('✅ Registration successful! Public key:');
+      console.log(data.public_key);
+      process.exit(0);
+    } else {
+      console.error('❌ Registration failed or public key not found:', data);
+      process.exit(2);
+    }
+  })
+  .catch(err => {
+    console.error('❌ Error:', err.message || err);
+    process.exit(3);
+  }); 
