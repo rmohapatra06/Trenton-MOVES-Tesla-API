@@ -14,5 +14,5 @@ else
   exit 1
 fi
 
-curl -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+curl -H "Authorization: Bearer ${PARTNER_TOKEN}" \
       -i https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/partner_accounts/public_key?domain=${NGROK_DOMAIN}

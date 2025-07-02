@@ -32,8 +32,8 @@ if [[ -z "${NGROK_DOMAIN:-}" ]]; then
   echo "❌  NGROK_DOMAIN is not set" >&2
   exit 1
 fi
-if [[ -z "${ACCESS_TOKEN:-}" ]]; then
-  echo "❌  ACCESS_TOKEN is not set" >&2
+if [[ -z "${PARTNER_TOKEN:-}" ]]; then
+  echo "❌  PARTNER_TOKEN is not set" >&2
   exit 1
 fi
 
@@ -41,4 +41,4 @@ echo "Checking if domain is registered: ${NGROK_DOMAIN}"
 
 curl -X GET "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/partner_accounts" \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}"
+  -H "Authorization: Bearer ${PARTNER_TOKEN}"

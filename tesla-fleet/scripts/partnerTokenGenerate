@@ -28,18 +28,18 @@ TOKEN_RESPONSE=$(curl --silent --request POST \
 echo "$TOKEN_RESPONSE"  # still print the response for your reference
 
 # Extract the access_token using jq
-ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+PARTNER_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
 
-if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then
+if [[ -z "$PARTNER_TOKEN" || "$PARTNER_TOKEN" == "null" ]]; then
   echo "❌ No access_token found in response."
   exit 1
 fi
 
-# Update or add ACCESS_TOKEN in the env file
-if grep -q '^ACCESS_TOKEN=' "$ENV_FILE"; then
-  sed -i '' "s|^ACCESS_TOKEN=.*|ACCESS_TOKEN='${ACCESS_TOKEN}'|" "$ENV_FILE"
+# Update or add PARTNER_TOKEN in the env file
+if grep -q '^PARTNER_TOKEN=' "$ENV_FILE"; then
+  sed -i '' "s|^PARTNER_TOKEN=.*|PARTNER_TOKEN='${PARTNER_TOKEN}'|" "$ENV_FILE"
 else
-  echo "ACCESS_TOKEN='${ACCESS_TOKEN}'" >> "$ENV_FILE"
+  echo "PARTNER_TOKEN='${PARTNER_TOKEN}'" >> "$ENV_FILE"
 fi
 
-echo "✅ ACCESS_TOKEN updated in $ENV_FILE"
+echo "✅ PARTNER_TOKEN updated in $ENV_FILE"

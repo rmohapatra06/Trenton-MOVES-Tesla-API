@@ -12,7 +12,7 @@ function extractTokensFromJson(jsonString) {
         const tokens = JSON.parse(cleanJson);
         
         return {
-            access_token: tokens.access_token,
+            tp_token: tokens.access_token,
             refresh_token: tokens.refresh_token,
             id_token: tokens.id_token
         };
@@ -23,18 +23,18 @@ function extractTokensFromJson(jsonString) {
 }
 
 // Function to update tokens in fleet.env file
-function updateTokensInFleetEnv(accessToken, refreshToken, idToken) {
+function updateTokensInFleetEnv(tpToken, refreshToken, idToken) {
     const envPath = path.join(__dirname, '..', 'fleet.env');
     
     try {
         // Read the current fleet.env file
         let content = fs.readFileSync(envPath, 'utf8');
         
-        // Update ACCESS_TOKEN variable
-        if (accessToken) {
+        // Update TP_TOKEN variable
+        if (tpToken) {
             content = content.replace(
-                /^ACCESS_TOKEN=.*$/m,
-                `ACCESS_TOKEN='${accessToken}'`
+                /^TP_TOKEN=.*$/m,
+                `TP_TOKEN='${tpToken}'`
             );
         }
         
@@ -46,9 +46,9 @@ function updateTokensInFleetEnv(accessToken, refreshToken, idToken) {
                     `REFRESH_TOKEN='${refreshToken}'`
                 );
             } else {
-                // Add REFRESH_TOKEN after ACCESS_TOKEN
+                // Add REFRESH_TOKEN after TP_TOKEN
                 content = content.replace(
-                    /^(ACCESS_TOKEN=.*)$/m,
+                    /^(TP_TOKEN=.*)$/m,
                     `$1\nREFRESH_TOKEN='${refreshToken}'`
                 );
             }
@@ -70,7 +70,7 @@ function updateTokensInFleetEnv(accessToken, refreshToken, idToken) {
                     );
                 } else {
                     content = content.replace(
-                        /^(ACCESS_TOKEN=.*)$/m,
+                        /^(TP_TOKEN=.*)$/m,
                         `$1\nID_TOKEN='${idToken}'`
                     );
                 }
@@ -81,7 +81,7 @@ function updateTokensInFleetEnv(accessToken, refreshToken, idToken) {
         fs.writeFileSync(envPath, content);
         
         console.log('✅ Successfully updated tokens in fleet.env:');
-        if (accessToken) console.log(`   ACCESS_TOKEN: ${accessToken.substring(0, 50)}...`);
+        if (tpToken) console.log(`   TP_TOKEN: ${tpToken.substring(0, 50)}...`);
         if (refreshToken) console.log(`   REFRESH_TOKEN: ${refreshToken}`);
         if (idToken) console.log(`   ID_TOKEN: ${idToken.substring(0, 50)}...`);
         
@@ -125,7 +125,7 @@ async function main() {
     }
     
     console.log(`\n📋 Extracted tokens:`);
-    if (tokens.access_token) console.log(`   Access Token: ${tokens.access_token.substring(0, 50)}...`);
+    if (tokens.tp_token) console.log(`   TP Token: ${tokens.tp_token.substring(0, 50)}...`);
     if (tokens.refresh_token) console.log(`   Refresh Token: ${tokens.refresh_token}`);
     if (tokens.id_token) console.log(`   ID Token: ${tokens.id_token.substring(0, 50)}...`);
     
@@ -137,7 +137,7 @@ async function main() {
     });
     
     if (confirm === 'y' || confirm === 'yes') {
-        updateTokensInFleetEnv(tokens.access_token, tokens.refresh_token, tokens.id_token);
+        updateTokensInFleetEnv(tokens.tp_token, tokens.refresh_token, tokens.id_token);
     } else {
         console.log('❌ Update cancelled');
     }
@@ -160,11 +160,11 @@ if (process.argv.length > 2) {
     console.log('🔄 Tesla Fleet API - Token Updater');
     console.log('==================================\n');
     console.log(`📋 Extracted tokens:`);
-    if (tokens.access_token) console.log(`   Access Token: ${tokens.access_token.substring(0, 50)}...`);
+    if (tokens.tp_token) console.log(`   TP Token: ${tokens.tp_token.substring(0, 50)}...`);
     if (tokens.refresh_token) console.log(`   Refresh Token: ${tokens.refresh_token}`);
     if (tokens.id_token) console.log(`   ID Token: ${tokens.id_token.substring(0, 50)}...\n`);
     
-    updateTokensInFleetEnv(tokens.access_token, tokens.refresh_token, tokens.id_token);
+    updateTokensInFleetEnv(tokens.tp_token, tokens.refresh_token, tokens.id_token);
 } else {
     // Interactive mode
     main().catch(console.error);

@@ -15,6 +15,6 @@ else
 fi
 
 curl -i -X POST "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/partner_accounts" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "Authorization: Bearer ${PARTNER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "{\"domain\":\"${NGROK_DOMAIN}\"}"

@@ -15,7 +15,7 @@ else
 fi
 
 # Authorization code token request
-curl --request POST \
+TOKEN_RESPONSE=$(curl --silent --request POST \
   --header 'Content-Type: application/x-www-form-urlencoded' \
   --data-urlencode 'grant_type=authorization_code' \
   --data-urlencode "client_id=${CLIENT_ID}" \
@@ -23,5 +23,23 @@ curl --request POST \
   --data-urlencode "code=${CODE}" \
   --data-urlencode "audience=${AUDIENCE}" \
   --data-urlencode "redirect_uri=${CALLBACK}" \
-  'https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token'
-# Extract access_token and refresh_token from this response
+  'https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token')
+
+echo "$TOKEN_RESPONSE"  # still print the response for your reference
+
+# Extract the access_token using jq
+TP_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+
+if [[ -z "$TP_TOKEN" || "$TP_TOKEN" == "null" ]]; then
+  echo "❌ No access_token found in response."
+  exit 1
+fi
+
+# Update or add TP_TOKEN in the env file
+if grep -q '^TP_TOKEN=' "$ENV_FILE"; then
+  sed -i '' "s|^TP_TOKEN=.*|TP_TOKEN='${TP_TOKEN}'|" "$ENV_FILE"
+else
+  echo "TP_TOKEN='${TP_TOKEN}'" >> "$ENV_FILE"
+fi
+
+echo "✅ TP_TOKEN updated in $ENV_FILE"
