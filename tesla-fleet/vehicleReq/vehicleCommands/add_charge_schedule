@@ -1,0 +1,34 @@
+/* Add a schedule for vehicle charging. To view existing schedules, call the vehicle_data endpoint and request charge_schedule_data. */
+
+// Load environment variables from fleet.env
+require('dotenv').config({ path: '../../fleet.env' });
+
+const BASE_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
+const vin = process.env.TESLA_VEHICLE_ID;
+
+const body = {
+    "lat": 37.7576928,
+    "lon": -122.4787994,
+    "id": 123,
+    "days_of_week": "Monday,Tuesday",
+    "start_enabled": true,
+    "start_time": 60,
+    "end_enabled": true,
+    "end_time": 690,
+    "one_time": false,
+    "enabled": true
+}
+
+const options = {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.TP_TOKEN}`
+    }
+};
+
+fetch(`${BASE_URL}/api/1/vehicles/${vin}/command/add_charge_schedule`, options)
+    .then(res => res.json())
+    .then(res => console.log(res))
+    .catch(err => console.log('error', err));

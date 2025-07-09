@@ -1,0 +1,33 @@
+/* Sends a navigation request to the vehicle. */
+
+// Load environment variables from fleet.env
+require('dotenv').config({ path: '../../fleet.env' });
+
+const BASE_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
+const vin = process.env.TESLA_VEHICLE_ID;
+
+const body = {
+    "type": "share_ext_content_raw",
+    "value": {
+        "android.intent.ACTION": "android.intent.action.SEND",
+        "android.intent.TYPE": "text/plain",
+        "android.intent.TEXT": "3500 Deer Creek Rd, Palo Alto, CA 94304",
+        "android.intent.extra.TEXT": "3500 Deer Creek Rd, Palo Alto, CA 94304"
+    },
+    "locale": "en-US",
+    "timestamp_ms": "1689291250000"
+}
+
+const options = {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.TP_TOKEN}`
+    }
+};
+
+fetch(`${BASE_URL}/api/1/vehicles/${vin}/command/navigation_request`, options)
+    .then(res => res.json())
+    .then(res => console.log(res))
+    .catch(err => console.log('error', err));

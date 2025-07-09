@@ -1,0 +1,17 @@
+// Load environment variables from fleet.env
+require('dotenv').config({ path: '../../fleet.env' });
+
+const BASE_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
+
+const options = {
+    method: 'GET',
+    headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.TP_TOKEN}`
+    }
+};
+
+fetch(`${BASE_URL}/api/1/dx/charging/history`, options)
+    .then(res => res.json())
+    .then(res => console.log(res))
+    .catch(err => console.log('error', err));

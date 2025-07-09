@@ -1,0 +1,26 @@
+/* Sets the scheduled charging time. */
+
+// Load environment variables from fleet.env
+require('dotenv').config({ path: '../../fleet.env' });
+
+const BASE_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
+const vin = process.env.TESLA_VEHICLE_ID;
+
+const body = {
+    "enable": true,
+    "time": 120
+}
+
+const options = {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.TP_TOKEN}`
+    }
+};
+
+fetch(`${BASE_URL}/api/1/vehicles/${vin}/command/set_scheduled_charging`, options)
+    .then(res => res.json())
+    .then(res => console.log(res))
+    .catch(err => console.log('error', err));

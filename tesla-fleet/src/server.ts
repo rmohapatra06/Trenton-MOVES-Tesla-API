@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { config } from 'dotenv';
 import healthRouter from './routes/health';
-import authRouter from './routes/auth';
+import authRouter from './routes/extractToken';
 import vehiclesRouter from './routes/vehicles';
 
 config();  // loads .env into process.env
