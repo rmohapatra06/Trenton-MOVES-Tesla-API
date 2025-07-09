@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Schedules a software update for the vehicle. */
 
 // Load environment variables from fleet.env

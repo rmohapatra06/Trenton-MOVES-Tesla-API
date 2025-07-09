@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Flashes the vehicle lights. */
 
 // Load environment variables from fleet.env

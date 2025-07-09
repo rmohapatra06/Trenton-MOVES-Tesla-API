@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 require('dotenv').config({ path: '../../fleet.env' });
 const BASE_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
 const vin = process.env.TESLA_VEHICLE_ID

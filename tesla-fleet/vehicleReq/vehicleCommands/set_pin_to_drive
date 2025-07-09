@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Sets or enables pin to drive for the vehicle. */
 
 // Load environment variables from fleet.env

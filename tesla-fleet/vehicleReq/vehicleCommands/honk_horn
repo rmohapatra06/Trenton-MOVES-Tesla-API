@@ -1,6 +1,8 @@
+#!/usr/bin/env node
+
 /* Honks the vehicle horn. */
 
-// Load environment variables from fleet.env
+/* Load environment variables from fleet.env */
 require('dotenv').config({ path: '../../fleet.env' });
 
 const BASE_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com';

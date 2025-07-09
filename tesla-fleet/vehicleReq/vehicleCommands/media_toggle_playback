@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Toggles media playback (play/pause). This command requires the user to be present and mobile access to be enabled. */
 
 // Load environment variables from fleet.env

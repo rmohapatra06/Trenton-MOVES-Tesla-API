@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Adjust vehicle media playback volume. This command requires the user to be present and mobile access to be enabled. */
 
 // Load environment variables from fleet.env

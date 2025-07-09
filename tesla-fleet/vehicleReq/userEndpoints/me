@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Load environment variables from fleet.env
 require('dotenv').config({ path: '../../fleet.env' });
 

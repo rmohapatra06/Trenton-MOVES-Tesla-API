@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Controls automatic steering wheel heating based on cabin temperature. */
 
 // Load environment variables from fleet.env

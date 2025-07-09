@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Sets the charge limit to the vehicle's maximum range (100%). */
 
 // Load environment variables from fleet.env

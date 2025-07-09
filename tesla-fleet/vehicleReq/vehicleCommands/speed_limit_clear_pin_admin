@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Clears the speed limit PIN admin setting for the vehicle. */
 
 // Load environment variables from fleet.env

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Sets the scheduled charging time. */
 
 // Load environment variables from fleet.env

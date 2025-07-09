@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Erases user data from the vehicle. This is irreversible. */
 
 // Load environment variables from fleet.env

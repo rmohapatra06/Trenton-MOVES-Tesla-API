@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Deactivates the speed limit for the vehicle. */
 
 // Load environment variables from fleet.env

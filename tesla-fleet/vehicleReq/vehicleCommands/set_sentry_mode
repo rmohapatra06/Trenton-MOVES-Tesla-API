@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Enables or disables sentry mode. */
 
 // Load environment variables from fleet.env

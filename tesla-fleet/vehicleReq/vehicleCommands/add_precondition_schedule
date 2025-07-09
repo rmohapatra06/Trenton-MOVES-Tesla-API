@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Add or modify a preconditioning schedule. To view existing schedules, call the vehicle_data endpoint and request preconditioning_schedule_data. */
 
 // Load environment variables from fleet.env

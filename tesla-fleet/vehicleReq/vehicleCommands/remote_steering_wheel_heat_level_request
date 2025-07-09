@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Sets the steering wheel heater level. */
 
 // Load environment variables from fleet.env

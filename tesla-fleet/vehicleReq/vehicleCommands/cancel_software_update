@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Cancels the countdown to install the vehicle software update. This operation will no longer work after the vehicle begins the software installation. */
 
 // Load environment variables from fleet.env

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Sends a supercharger navigation request to the vehicle. */
 
 // Load environment variables from fleet.env

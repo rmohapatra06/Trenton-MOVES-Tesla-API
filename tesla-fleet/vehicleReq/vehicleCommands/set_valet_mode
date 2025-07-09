@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Enables or disables valet mode. */
 
 // Load environment variables from fleet.env

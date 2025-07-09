@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Stops vehicle charging. */
 
 // Load environment variables from fleet.env

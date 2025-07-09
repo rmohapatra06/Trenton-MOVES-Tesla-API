@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Sets the temperature for the driver and passenger seats. */
 
 // Load environment variables from fleet.env

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Sets the vehicle charging amperage. */
 
 // Load environment variables from fleet.env

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Add a schedule for vehicle charging. To view existing schedules, call the vehicle_data endpoint and request charge_schedule_data. */
 
 // Load environment variables from fleet.env

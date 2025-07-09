@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Skips to the next favorite in media playback. This command requires the user to be present and mobile access to be enabled. */
 
 // Load environment variables from fleet.env

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Sets the maximum preconditioning temperature. */
 
 // Load environment variables from fleet.env

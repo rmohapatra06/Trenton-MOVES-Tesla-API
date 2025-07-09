@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Plays sound using the vehicle's external speaker system. */
 
 // Load environment variables from fleet.env

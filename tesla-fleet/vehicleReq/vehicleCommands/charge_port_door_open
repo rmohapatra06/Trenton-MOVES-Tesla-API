@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Opens the vehicle charge port door. */
 
 // Load environment variables from fleet.env

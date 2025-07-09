@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Enables or disables guest mode for the vehicle. */
 
 // Load environment variables from fleet.env

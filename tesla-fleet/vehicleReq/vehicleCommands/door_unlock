@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Unlocks the vehicle doors. */
 
 // Load environment variables from fleet.env

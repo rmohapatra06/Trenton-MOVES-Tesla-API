@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Starts climate preconditioning. */ 
 
 // Load environment variables from fleet.env

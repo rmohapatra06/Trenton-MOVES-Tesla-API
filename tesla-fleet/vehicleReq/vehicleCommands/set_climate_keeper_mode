@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* Sets the climate keeper mode. */
 
 // Load environment variables from fleet.env
