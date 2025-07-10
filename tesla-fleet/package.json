@@ -2,11 +2,11 @@
   "name": "tesla-fleet-api",
   "version": "1.0.0",
   "description": "",
-  "main": "dist/server.js",
+  "main": "src/server.ts",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "ts-node src/server.ts"
   },
   "keywords": [],
   "author": "",

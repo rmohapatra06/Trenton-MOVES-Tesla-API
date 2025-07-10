@@ -6,7 +6,7 @@ const body = {
     "config": {
         "delivery_policy": "latest",
         "prefer_typed": true,
-        "port": 4443,
+        "port": 3000,
         "exp": 1704067200,
         "alert_types": [
             "service"
@@ -19,11 +19,10 @@ const body = {
             }
         },
         "ca": "-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n",
-        "hostname": "test-telemetry.com"
+        "hostname": "barnacle-pleasing-heavily.ngrok-free.app"
     },
     "vins": [
-        "vin1",
-        "vin2"
+        `${process.env.TESLA_VEHICLE_ID}`,
     ]
 }
 
