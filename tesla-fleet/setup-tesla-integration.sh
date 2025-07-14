@@ -63,8 +63,8 @@ echo ""
 
 # Step 4: Generate and display the OAuth URL for third-party flow
 echo "4️⃣  Generated OAuth URL (Third-Party):"
-RAND_STATE=$(openssl rand -hex 16)
-OAUTH_URL="https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/authorize?&client_id=${CLIENT_ID}&locale=en-US&prompt=login&redirect_uri=https://${NGROK_DOMAIN}/extractToken&response_type=code&scope=openid%20vehicle_device_data%20offline_access%20vehicle_cmds%20vehicle_location%20user_data&state=${RAND_STATE}"
+RAND_STATE=$(openssl rand -hex 32)
+OAUTH_URL="https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/authorize?&client_id=${CLIENT_ID}&locale=en-US&prompt=login&redirect_uri=https%3A%2F%2F${NGROK_DOMAIN}%2FextractToken&response_type=code&scope=openid%20vehicle_device_data%20offline_access%20vehicle_cmds%20vehicle_location%20user_data&state=${RAND_STATE}"
 echo "   $OAUTH_URL"
 echo ""
 echo "   1. Open this URL in your browser"

@@ -5,7 +5,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-config();
+// Load environment variables from fleet.env
+config({ path: path.join(__dirname, '../../fleet.env') });
 
 const router = Router();
 
@@ -35,7 +36,7 @@ const updateTokenEnvFile = async (tokens: {
   refreshToken?: string;
   idToken?: string;
 }): Promise<void> => {
-  const tokenEnvFilePath = path.join(process.env.HOME || '', 'Research 2025/Tesla Fleet API/tesla-fleet/token.env');
+  const tokenEnvFilePath = path.join(__dirname, '../../fleet.env');
   
   if (!fs.existsSync(tokenEnvFilePath)) {
     throw new Error(`Token environment file not found: ${tokenEnvFilePath}`);
@@ -149,7 +150,6 @@ router.get('/extractToken', async (req: Request, res: Response): Promise<void> =
     formData.append('client_id', process.env.CLIENT_ID!);
     formData.append('client_secret', process.env.CLIENT_SECRET!);
     formData.append('code', code);
-    formData.append('audience', process.env.AUDIENCE!);
     formData.append('redirect_uri', process.env.CALLBACK!);
 
     console.log(`🔗 Making request to: https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token`);
@@ -157,7 +157,6 @@ router.get('/extractToken', async (req: Request, res: Response): Promise<void> =
       grant_type: 'authorization_code',
       client_id: process.env.CLIENT_ID,
       code: code.substring(0, 20) + '...',
-      audience: process.env.AUDIENCE,
       redirect_uri: process.env.CALLBACK
     });
 
