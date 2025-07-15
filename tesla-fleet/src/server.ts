@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { config } from 'dotenv';
 import { sequelize, VehicleToken } from './db';
-import { TeslaToolkit } from "tesla-toolkit";
+import { VehicleCache } from "tesla-api-toolkit";
 import healthRouter from './routes/health';
 import authRouter from './routes/extractToken';
 import vehiclesRouter from './routes/vehicles';
@@ -25,6 +25,8 @@ app.use(
 app.use('/health', healthRouter);
 app.use('/', authRouter);
 app.use('/', vehiclesRouter);
+
+// Connect and sync database
 
 app.listen(PORT, () => {
   console.log(`🚀 Server listening on http://localhost:${PORT}`);
