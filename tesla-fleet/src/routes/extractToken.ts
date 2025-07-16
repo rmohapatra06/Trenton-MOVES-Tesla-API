@@ -4,31 +4,49 @@ import { config } from 'dotenv';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { VehicleToken } from '../db';
+import jwt from 'jsonwebtoken'; // to decode sub from idToken
+import { cache } from '../proxy';
 
 // Load environment variables from fleet.env
 config({ path: path.join(__dirname, '../../fleet.env') });
 
 const router = Router();
 
-// In-memory storage for users (in production, use a proper database)
-const users: Map<string, { id: string; email: string; password: string }> = new Map();
-
-// Token storage interface for future database implementation
-interface TokenData {
-  userId?: string;
-  tpToken: string;
-  refreshToken: string;
-  idToken?: string;
-  updatedAt: Date;
+// Add these interfaces at the top of the file after imports
+interface VehicleResponse {
+  response: Array<{
+    vin: string;
+    id_s: string;
+  }>;
 }
 
-// In-memory token storage (replace with database later)
-const tokenStorage: Map<string, TokenData> = new Map();
+interface TokenResponse {
+  access_token: string;
+  refresh_token: string;
+  id_token: string;
+  token_type: string;
+  expires_in: number;
+}
 
-// Helper function to generate user ID
-const generateUserId = (): string => {
-  return crypto.randomUUID();
-};
+// helper
+async function upsertTokenRow(
+  vin: string,
+  vehicleId: string,
+  { userIdSub, tpToken, refreshToken, idToken, expiresIn }: {
+    userIdSub: string, tpToken: string, refreshToken: string,
+    idToken: string, expiresIn: number }
+) {
+  await VehicleToken.upsert({
+    userId:      userIdSub,
+    vin,
+    vehicleId,
+    idToken,
+    accessToken: tpToken,
+    refreshToken,
+    expiresAt:   new Date(Date.now() + expiresIn * 1000),
+  });
+}
 
 // Helper function to update token environment file
 const updateTokenEnvFile = async (tokens: {
@@ -76,59 +94,12 @@ const updateTokenEnvFile = async (tokens: {
 
   fs.writeFileSync(tokenEnvFilePath, envContent);
 };
-
-// Helper function to store tokens (database preparation)
-const storeTokens = (userId: string | undefined, tokens: TokenData): void => {
-  const key = userId || 'default';
-  tokenStorage.set(key, tokens);
-  console.log(`✅ Tokens stored for user: ${key}`);
-};
-
-// Step 7: Create a token manager account
-router.post('/user/auth/register', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      res.status(400).json({ error: 'Email and password are required' });
-      return;
-    }
-
-    // Check if user already exists
-    if (users.has(email)) {
-      res.status(409).json({ error: 'User already exists' });
-      return;
-    }
-
-    // Create new user
-    const userId = generateUserId();
-    users.set(email, {
-      id: userId,
-      email,
-      password // In production, hash this password!
-    });
-
-    console.log(`✅ User registered: ${email} with ID: ${userId}`);
-    
-    res.status(201).json({
-      message: 'User registered successfully',
-      user_id: userId,
-      email: email
-    });
-  } catch (err) {
-    console.error('Error registering user:', err);
-    res.status(500).json({ error: 'Registration failed' });
-  }
-});
-
 // Enhanced extractToken endpoint with authCodeTokenReq functionality
 router.get('/extractToken', async (req: Request, res: Response): Promise<void> => {
   console.log(`🌐 Received ${req.method} request to ${req.path}`);
   console.log(`📝 Query params:`, req.query);
-  console.log(`📝 Body:`, req.body);
 
   const code = req.query.code as string | undefined;
-  const userId = req.query.userId as string | undefined; // Optional user ID for database functionality
 
   if (!code) {
     console.log('❌ No code parameter found in request');
@@ -144,7 +115,6 @@ router.get('/extractToken', async (req: Request, res: Response): Promise<void> =
   try {
     console.log(`🔄 Processing token exchange for code: ${code.substring(0, 20)}...`);
     
-    // Prepare token exchange request (matching exact curl format with data-urlencode)
     const formData = new URLSearchParams();
     formData.append('grant_type', 'authorization_code');
     formData.append('client_id', process.env.CLIENT_ID!);
@@ -162,9 +132,7 @@ router.get('/extractToken', async (req: Request, res: Response): Promise<void> =
 
     const response = await fetch('https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token', {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: formData.toString()
     });
 
@@ -174,7 +142,7 @@ router.get('/extractToken', async (req: Request, res: Response): Promise<void> =
       throw new Error(`Token exchange failed: ${response.status} ${response.statusText} - ${errorText}`);
     }
 
-    const tokenResponse = await response.json() as any;
+    const tokenResponse = await response.json() as TokenResponse;
     console.log('🎯 Token exchange successful');
 
     // Extract tokens
@@ -183,180 +151,48 @@ router.get('/extractToken', async (req: Request, res: Response): Promise<void> =
     const idToken = tokenResponse.id_token;
 
     // Validate required tokens
-    if (!tpToken) {
-      throw new Error('No access_token found in response');
-    }
-    if (!refreshToken) {
-      throw new Error('No refresh_token found in response');
+    if (!tpToken || !refreshToken || !idToken) {
+      throw new Error('Missing required tokens in response');
     }
 
-    // Prepare token data for storage
-    const tokenData: TokenData = {
-      userId,
-      tpToken,
-      refreshToken,
-      idToken,
-      updatedAt: new Date()
-    };
+    // Extract user ID from idToken
+    const { sub } = jwt.decode(idToken) as { sub: string };
 
-    // Store tokens in memory (database preparation)
-    storeTokens(userId, tokenData);
-
-    // Update token environment file (safe testing)
-    try {
-      await updateTokenEnvFile({ 
-        tpToken, 
-        refreshToken, 
-        idToken
-      });
-
-      console.log('✅ Token environment file updated with new tokens');
-      console.log(`   TP_TOKEN: ${tpToken.substring(0, 50)}...`);
-      console.log(`   REFRESH_TOKEN: ${refreshToken}`);
-      console.log(`   ID_TOKEN: ${idToken ? idToken.substring(0, 50) + '...' : 'N/A'}`);
-    } catch (envError) {
-      console.error('⚠️ Failed to update token environment file:', envError);
-      // Continue processing even if env update fails
-    }
-
-    // Prepare response
-    const responseData = {
-      success: true,
-      message: 'Token exchange completed successfully',
-      tokens: {
-        access_token: tpToken,
-        refresh_token: refreshToken,
-        id_token: idToken,
-        token_type: tokenResponse.token_type,
-        expires_in: tokenResponse.expires_in
-      },
-      storage: {
-        tokenEnvFile: 'updated',
-        inMemoryStorage: 'updated'
-      },
-      userId,
-      updatedAt: tokenData.updatedAt
-    };
-
-    res.json(responseData);
-
-  } catch (err) {
-    console.error('❌ Error exchanging code for tokens:', err);
-    res.status(500).json({ 
-      error: 'Token exchange failed',
-      message: err instanceof Error ? err.message : 'Unknown error occurred'
+    // Get vehicles list using the access token
+    const vehicleResponse = await fetch('https://fleet-api.prd.vn.cloud.tesla.com/api/1/vehicles', {
+      headers: { 'Authorization': `Bearer ${tpToken}` }
     });
-  }
-});
-
-// Also handle POST requests for extractToken (in case that's needed)
-router.post('/extractToken', async (req: Request, res: Response): Promise<void> => {
-  console.log(`🌐 Received ${req.method} request to ${req.path}`);
-  console.log(`📝 Query params:`, req.query);
-  console.log(`📝 Body:`, req.body);
-
-  // For POST, code might be in body or query
-  const code = (req.query.code || req.body.code) as string | undefined;
-  const userId = (req.query.userId || req.body.userId) as string | undefined;
-
-  if (!code) {
-    console.log('❌ No code parameter found in request');
-    res.status(400).json({ 
-      error: 'Missing code parameter',
-      message: 'Authorization code is required for token exchange',
-      receivedParams: { 
-        queryKeys: Object.keys(req.query),
-        bodyKeys: Object.keys(req.body || {})
-      },
-      fullUrl: req.url
-    });
-    return;
-  }
-
-  try {
-    console.log(`🔄 Processing token exchange for code: ${code.substring(0, 20)}...`);
     
-    // Prepare token exchange request (matching exact curl format with data-urlencode)
-    const formData = new URLSearchParams();
-    formData.append('grant_type', 'authorization_code');
-    formData.append('client_id', process.env.CLIENT_ID!);
-    formData.append('client_secret', process.env.CLIENT_SECRET!);
-    formData.append('code', code);
-    formData.append('audience', process.env.AUDIENCE!);
-    formData.append('redirect_uri', process.env.CALLBACK!);
-
-    console.log(`🔗 Making request to: https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token`);
-    console.log(`📋 Request parameters:`, {
-      grant_type: 'authorization_code',
-      client_id: process.env.CLIENT_ID,
-      code: code.substring(0, 20) + '...',
-      audience: process.env.AUDIENCE,
-      redirect_uri: process.env.CALLBACK
-    });
-
-    const response = await fetch('https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token', {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: formData.toString()
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.log(`❌ Tesla API Error Response: ${errorText}`);
-      throw new Error(`Token exchange failed: ${response.status} ${response.statusText} - ${errorText}`);
+    if (!vehicleResponse.ok) {
+      throw new Error('Failed to fetch vehicles');
     }
 
-    const tokenResponse = await response.json() as any;
-    console.log('🎯 Token exchange successful');
+    const vehicles = (await vehicleResponse.json() as VehicleResponse).response;
 
-    // Extract tokens
-    const tpToken = tokenResponse.access_token;
-    const refreshToken = tokenResponse.refresh_token;
-    const idToken = tokenResponse.id_token;
-
-    // Validate required tokens
-    if (!tpToken) {
-      throw new Error('No access_token found in response');
-    }
-    if (!refreshToken) {
-      throw new Error('No refresh_token found in response');
-    }
-
-    // Prepare token data for storage
-    const tokenData: TokenData = {
-      userId,
-      tpToken,
-      refreshToken,
-      idToken,
-      updatedAt: new Date()
-    };
-
-    // Store tokens in memory (database preparation)
-    storeTokens(userId, tokenData);
-
-    // Update token environment file (safe testing)
-    try {
-      await updateTokenEnvFile({ 
-        tpToken, 
-        refreshToken, 
-        idToken
+    // Store tokens for each vehicle in database
+    for (const v of vehicles) {
+      cache.ensureVehicle(v.id_s, v.vin);
+      await upsertTokenRow(v.vin, v.id_s, {
+        userIdSub: sub,
+        tpToken,
+        refreshToken,
+        idToken,
+        expiresIn: tokenResponse.expires_in
       });
+    }
 
+    /* Commented out environment file update for fallback
+    try {
+      await updateTokenEnvFile({ tpToken, refreshToken, idToken });
       console.log('✅ Token environment file updated with new tokens');
-      console.log(`   TP_TOKEN: ${tpToken.substring(0, 50)}...`);
-      console.log(`   REFRESH_TOKEN: ${refreshToken}`);
-      console.log(`   ID_TOKEN: ${idToken ? idToken.substring(0, 50) + '...' : 'N/A'}`);
     } catch (envError) {
       console.error('⚠️ Failed to update token environment file:', envError);
-      // Continue processing even if env update fails
     }
+    */
 
-    // Prepare response
-    const responseData = {
+    res.json({
       success: true,
-      message: 'Token exchange completed successfully',
+      message: 'Token exchange and storage completed successfully',
       tokens: {
         access_token: tpToken,
         refresh_token: refreshToken,
@@ -364,60 +200,31 @@ router.post('/extractToken', async (req: Request, res: Response): Promise<void> 
         token_type: tokenResponse.token_type,
         expires_in: tokenResponse.expires_in
       },
-      storage: {
-        tokenEnvFile: 'updated',
-        inMemoryStorage: 'updated'
-      },
-      userId,
-      updatedAt: tokenData.updatedAt
-    };
-
-    res.json(responseData);
+      vehicles: vehicles.map(v => ({ vin: v.vin, id: v.id_s }))
+    });
 
   } catch (err) {
-    console.error('❌ Error exchanging code for tokens:', err);
+    console.error('❌ Error:', err);
     res.status(500).json({ 
-      error: 'Token exchange failed',
+      error: 'Operation failed',
       message: err instanceof Error ? err.message : 'Unknown error occurred'
     });
   }
 });
 
-// New endpoint to get stored tokens for a user (database preparation)
-router.get('/tokens/:userId', (req: Request, res: Response): void => {
-  const { userId } = req.params;
-  const tokenData = tokenStorage.get(userId);
-
-  if (!tokenData) {
-    res.status(404).json({ error: 'No tokens found for this user' });
-    return;
+// POST handler with same logic
+router.post('/extractToken', async (req: Request, res: Response): Promise<void> => {
+  const code = (req.query.code || req.body.code) as string | undefined;
+  // Set the code in query params for consistent handling
+  req.query.code = code;
+  // Remove code from body to avoid confusion
+  if (req.body && 'code' in req.body) {
+    delete req.body.code;
   }
-
-  res.json({
-    userId,
-    hasTokens: true,
-    updatedAt: tokenData.updatedAt,
-    // Don't expose actual token values for security
-    tokenInfo: {
-      hasTpToken: !!tokenData.tpToken,
-      hasRefreshToken: !!tokenData.refreshToken,
-      hasIdToken: !!tokenData.idToken
-    }
+  // Handle the request using the same logic
+  await new Promise<void>((resolve) => {
+    router.get('/extractToken')(req, res, () => resolve());
   });
-});
-
-// Helper endpoint to get user by ID
-router.get('/user/:userId', (req: Request, res: Response): void => {
-  const { userId } = req.params;
-  
-  for (const [email, user] of users.entries()) {
-    if (user.id === userId) {
-      res.json({ user_id: user.id, email: user.email });
-      return;
-    }
-  }
-  
-  res.status(404).json({ error: 'User not found' });
 });
 
 export default router;

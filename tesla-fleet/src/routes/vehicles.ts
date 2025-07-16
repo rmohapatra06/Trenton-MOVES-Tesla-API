@@ -1,62 +1,27 @@
 import express, { Router, Request, Response } from 'express';
-import fetch from 'node-fetch';
 import { config } from 'dotenv';
-import fs from 'fs';
-import path from 'path';
-import crypto from 'crypto';
+import fetch from 'node-fetch';
+import { cache, signWithECKey, getPublicKey } from '../proxy';
+import { VehicleToken } from '../db';
 
 config();
 
 const router = Router();
-
-// Load private key for signing vehicle commands
-const loadPrivateKey = (): string => {
-  try {
-    const privateKeyPath = path.join(__dirname, '..', '..', 'keys', 'private-key.pem');
-    return fs.readFileSync(privateKeyPath, 'utf8');
-  } catch (error) {
-    console.error('Error loading private key:', error);
-    throw new Error('Private key not found or unreadable');
-  }
-};
-
-// Load public key for verification
-const loadPublicKey = (): string => {
-  try {
-    const publicKeyPath = path.join(__dirname, '..', '..', 'public', '.well-known', 'appspecific', 'com.tesla.3p.public-key.pem');
-    return fs.readFileSync(publicKeyPath, 'utf8');
-  } catch (error) {
-    console.error('Error loading public key:', error);
-    throw new Error('Public key not found or unreadable');
-  }
-};
-
-// Sign data with EC private key
-const signWithECKey = (data: string, privateKey: string): string => {
-  try {
-    // Create a sign object with EC key
-    const sign = crypto.createSign('SHA256');
-    sign.update(data);
-    const signature = sign.sign(privateKey, 'base64');
-    return signature;
-  } catch (error) {
-    console.error('Error signing data:', error);
-    throw new Error('Failed to sign data with EC key');
-  }
-};
 
 // Get vehicles for a specific user
 router.get('/user/vehicles/getVehicles/:userId', async (req: Request, res: Response): Promise<void> => {
   try {
     const { userId } = req.params;
     
-    // TODO: Get access token for this user from storage
-    const accessToken = process.env.ACCESS_TOKEN; // For now, use the partner token
+    // Get access token from database
+    const vehicleToken = await VehicleToken.findOne({ where: { userId } });
     
-    if (!accessToken) {
-      res.status(401).json({ error: 'No access token available' });
+    if (!vehicleToken) {
+      res.status(401).json({ error: 'No access token found for user' });
       return;
     }
+
+    const accessToken = vehicleToken.get('accessToken') as string;
 
     const response = await fetch('https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles', {
       method: 'GET',
@@ -88,37 +53,38 @@ router.get('/user/vehicles/getVehicles/:userId', async (req: Request, res: Respo
 // Honk horn endpoint
 router.post('/user/vehicles/honkHorn', async (req: Request, res: Response): Promise<void> => {
   try {
-    // TODO: Get user_id and VIN from request body or query params
-    // For now, these would need to be set explicitly as mentioned in the docs
     const userId = req.body.user_id || req.query.user_id;
     const vin = req.body.vin || req.query.vin;
     
     if (!userId || !vin) {
-      res.status(400).json({ 
-        error: 'user_id and vin are required. Set these explicitly in the code temporarily.' 
-      });
+      res.status(400).json({ error: 'user_id and vin are required' });
       return;
     }
 
-    // TODO: Get access token for this user from storage
-    const accessToken = process.env.ACCESS_TOKEN; // For now, use the partner token
+    // Get access token from database
+    const vehicleToken = await VehicleToken.findOne({ 
+      where: { userId, vin }
+    });
     
-    if (!accessToken) {
-      res.status(401).json({ error: 'No access token available' });
+    if (!vehicleToken) {
+      res.status(401).json({ error: 'No access token found for user and vehicle' });
       return;
     }
 
-    // Load private key for signing the command
-    const privateKey = loadPrivateKey();
+    const accessToken = vehicleToken.get('accessToken') as string;
+    const vehicleId = vehicleToken.get('vehicleId') as string;
+
+    // Ensure vehicle is in cache
+    cache.ensureVehicle(vehicleId, vin);
     
-    // Create a signature for the command (Tesla may require this for vehicle commands)
+    // Create and sign command data
     const commandData = JSON.stringify({
       command: 'honk_horn',
       vin: vin,
       timestamp: Date.now()
     });
     
-    const signature = signWithECKey(commandData, privateKey);
+    const signature = signWithECKey(commandData);
 
     const response = await fetch(`https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/${vin}/command/honk_horn`, {
       method: 'POST',
@@ -154,17 +120,15 @@ router.post('/user/vehicles/honkHorn', async (req: Request, res: Response): Prom
 // Endpoint to verify public key is accessible
 router.get('/user/vehicles/verify-keys', (req: Request, res: Response): void => {
   try {
-    const privateKey = loadPrivateKey();
-    const publicKey = loadPublicKey();
+    const publicKey = getPublicKey();
     
     // Test signing with the private key
     const testData = 'test-signature-data';
-    const testSignature = signWithECKey(testData, privateKey);
+    const testSignature = signWithECKey(testData);
     
     res.json({
       status: 'success',
       message: 'Keys loaded and signing works successfully',
-      private_key_length: privateKey.length,
       public_key_length: publicKey.length,
       public_key_available: true,
       signing_works: true,
