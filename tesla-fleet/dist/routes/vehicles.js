@@ -13,59 +13,23 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const node_fetch_1 = __importDefault(require("node-fetch"));
 const dotenv_1 = require("dotenv");
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const crypto_1 = __importDefault(require("crypto"));
+const node_fetch_1 = __importDefault(require("node-fetch"));
+const proxy_1 = require("../proxy");
+const db_1 = require("../db");
 (0, dotenv_1.config)();
 const router = (0, express_1.Router)();
-// Load private key for signing vehicle commands
-const loadPrivateKey = () => {
-    try {
-        const privateKeyPath = path_1.default.join(__dirname, '..', '..', 'keys', 'private-key.pem');
-        return fs_1.default.readFileSync(privateKeyPath, 'utf8');
-    }
-    catch (error) {
-        console.error('Error loading private key:', error);
-        throw new Error('Private key not found or unreadable');
-    }
-};
-// Load public key for verification
-const loadPublicKey = () => {
-    try {
-        const publicKeyPath = path_1.default.join(__dirname, '..', '..', 'public', '.well-known', 'appspecific', 'com.tesla.3p.public-key.pem');
-        return fs_1.default.readFileSync(publicKeyPath, 'utf8');
-    }
-    catch (error) {
-        console.error('Error loading public key:', error);
-        throw new Error('Public key not found or unreadable');
-    }
-};
-// Sign data with EC private key
-const signWithECKey = (data, privateKey) => {
-    try {
-        // Create a sign object with EC key
-        const sign = crypto_1.default.createSign('SHA256');
-        sign.update(data);
-        const signature = sign.sign(privateKey, 'base64');
-        return signature;
-    }
-    catch (error) {
-        console.error('Error signing data:', error);
-        throw new Error('Failed to sign data with EC key');
-    }
-};
 // Get vehicles for a specific user
 router.get('/user/vehicles/getVehicles/:userId', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { userId } = req.params;
-        // TODO: Get access token for this user from storage
-        const accessToken = process.env.ACCESS_TOKEN; // For now, use the partner token
-        if (!accessToken) {
-            res.status(401).json({ error: 'No access token available' });
+        // Get access token from database
+        const vehicleToken = yield db_1.VehicleToken.findOne({ where: { userId } });
+        if (!vehicleToken) {
+            res.status(401).json({ error: 'No access token found for user' });
             return;
         }
+        const accessToken = vehicleToken.get('accessToken');
         const response = yield (0, node_fetch_1.default)('https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles', {
             method: 'GET',
             headers: {
@@ -93,31 +57,31 @@ router.get('/user/vehicles/getVehicles/:userId', (req, res) => __awaiter(void 0,
 // Honk horn endpoint
 router.post('/user/vehicles/honkHorn', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        // TODO: Get user_id and VIN from request body or query params
-        // For now, these would need to be set explicitly as mentioned in the docs
         const userId = req.body.user_id || req.query.user_id;
         const vin = req.body.vin || req.query.vin;
         if (!userId || !vin) {
-            res.status(400).json({
-                error: 'user_id and vin are required. Set these explicitly in the code temporarily.'
-            });
+            res.status(400).json({ error: 'user_id and vin are required' });
             return;
         }
-        // TODO: Get access token for this user from storage
-        const accessToken = process.env.ACCESS_TOKEN; // For now, use the partner token
-        if (!accessToken) {
-            res.status(401).json({ error: 'No access token available' });
+        // Get access token from database
+        const vehicleToken = yield db_1.VehicleToken.findOne({
+            where: { userId, vin }
+        });
+        if (!vehicleToken) {
+            res.status(401).json({ error: 'No access token found for user and vehicle' });
             return;
         }
-        // Load private key for signing the command
-        const privateKey = loadPrivateKey();
-        // Create a signature for the command (Tesla may require this for vehicle commands)
+        const accessToken = vehicleToken.get('accessToken');
+        const vehicleId = vehicleToken.get('vehicleId');
+        // Ensure vehicle is in cache
+        proxy_1.cache.ensureVehicle(vehicleId, vin);
+        // Create and sign command data
         const commandData = JSON.stringify({
             command: 'honk_horn',
             vin: vin,
             timestamp: Date.now()
         });
-        const signature = signWithECKey(commandData, privateKey);
+        const signature = (0, proxy_1.signWithECKey)(commandData);
         const response = yield (0, node_fetch_1.default)(`https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/${vin}/command/honk_horn`, {
             method: 'POST',
             headers: {
@@ -149,15 +113,13 @@ router.post('/user/vehicles/honkHorn', (req, res) => __awaiter(void 0, void 0, v
 // Endpoint to verify public key is accessible
 router.get('/user/vehicles/verify-keys', (req, res) => {
     try {
-        const privateKey = loadPrivateKey();
-        const publicKey = loadPublicKey();
+        const publicKey = (0, proxy_1.getPublicKey)();
         // Test signing with the private key
         const testData = 'test-signature-data';
-        const testSignature = signWithECKey(testData, privateKey);
+        const testSignature = (0, proxy_1.signWithECKey)(testData);
         res.json({
             status: 'success',
             message: 'Keys loaded and signing works successfully',
-            private_key_length: privateKey.length,
             public_key_length: publicKey.length,
             public_key_available: true,
             signing_works: true,

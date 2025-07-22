@@ -1,4 +1,17 @@
 services:
+  fleet_telemetry:
+    image: tesla/fleet-telemetry:latest
+    container_name: fleet_telemetry
+    depends_on:
+      - tesla_http_proxy
+    ports: 
+      - "8443:443"
+    volumes:
+      - ./telemetry-config.json:/app/config.json:ro
+      - ./config:/config:ro
+    command:
+      - /fleet-telemetry
+      - -config=/app/config.json
   db:
     image: postgres:17
     container_name: tesla_tokens_db
@@ -16,14 +29,35 @@ services:
     container_name: tesla_fleet_api
     depends_on:
       - db
+      - tesla_http_proxy
     environment:
       DATABASE_URL: postgres://rishabhmohapatra:thebigflute2006@db:5432/tesla_tokens_db
+      JWT_SECRET: development-secret
       NODE_ENV: development
+      PROXY_URL: http://tesla_http_proxy:4443
+      NODE_EXTRA_CA_CERTS: /usr/src/app/config/tls-cert.pem
+      NODE_OPTIONS: "--use-system-ca"
     ports:
       - "3000:3000"
     volumes:
       - .:/usr/src/app
       - /usr/src/app/node_modules
+
+  tesla_http_proxy:
+    image: tesla/vehicle-command:latest
+    container_name: tesla_http_proxy
+    ports:
+      - "4443:4443"
+    environment:
+      TESLA_HTTP_PROXY_TLS_CERT: /config/tls-cert.pem
+      TESLA_HTTP_PROXY_TLS_KEY: /config/tls-key.pem
+      TESLA_HTTP_PROXY_HOST: 0.0.0.0
+      TESLA_HTTP_PROXY_PORT: 4443
+      TESLA_HTTP_PROXY_TIMEOUT: 10s
+      TESLA_KEY_FILE: /config/fleet-key.pem
+      TESLA_VERBOSE: "true"
+    volumes:
+      - ./config:/config
 
 volumes:
   postgres_data: 

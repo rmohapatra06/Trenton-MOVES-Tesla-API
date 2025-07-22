@@ -6,20 +6,11 @@ import fs from 'fs';
 import path from 'path';
 import { VehicleToken } from '../db';
 import jwt from 'jsonwebtoken'; // to decode sub from idToken
-import { cache } from '../proxy';
 
 // Load environment variables from fleet.env
 config({ path: path.join(__dirname, '../../fleet.env') });
 
 const router = Router();
-
-// Add these interfaces at the top of the file after imports
-interface VehicleResponse {
-  response: Array<{
-    vin: string;
-    id_s: string;
-  }>;
-}
 
 interface TokenResponse {
   access_token: string;
@@ -30,21 +21,19 @@ interface TokenResponse {
 }
 
 // helper
-async function upsertTokenRow(
-  vin: string,
-  vehicleId: string,
+async function storeTokens(
   { userIdSub, tpToken, refreshToken, idToken, expiresIn }: {
     userIdSub: string, tpToken: string, refreshToken: string,
     idToken: string, expiresIn: number }
 ) {
   await VehicleToken.upsert({
-    userId:      userIdSub,
-    vin,
-    vehicleId,
+    userId: userIdSub,
+    vin: null,  // No vehicle info for now
+    vehicleId: null,  // No vehicle info for now
     idToken,
     accessToken: tpToken,
     refreshToken,
-    expiresAt:   new Date(Date.now() + expiresIn * 1000),
+    expiresAt: new Date(Date.now() + expiresIn * 1000),
   });
 }
 
@@ -94,6 +83,7 @@ const updateTokenEnvFile = async (tokens: {
 
   fs.writeFileSync(tokenEnvFilePath, envContent);
 };
+
 // Enhanced extractToken endpoint with authCodeTokenReq functionality
 router.get('/extractToken', async (req: Request, res: Response): Promise<void> => {
   console.log(`🌐 Received ${req.method} request to ${req.path}`);
@@ -156,30 +146,17 @@ router.get('/extractToken', async (req: Request, res: Response): Promise<void> =
     }
 
     // Extract user ID from idToken
-    const { sub } = jwt.decode(idToken) as { sub: string };
+    const decodedToken = jwt.decode(idToken) as { [key: string]: any };
+    const { sub } = decodedToken;
 
-    // Get vehicles list using the access token
-    const vehicleResponse = await fetch('https://fleet-api.prd.vn.cloud.tesla.com/api/1/vehicles', {
-      headers: { 'Authorization': `Bearer ${tpToken}` }
+    // Store tokens in database
+    await storeTokens({
+      userIdSub: sub,
+      tpToken,
+      refreshToken,
+      idToken,
+      expiresIn: tokenResponse.expires_in
     });
-    
-    if (!vehicleResponse.ok) {
-      throw new Error('Failed to fetch vehicles');
-    }
-
-    const vehicles = (await vehicleResponse.json() as VehicleResponse).response;
-
-    // Store tokens for each vehicle in database
-    for (const v of vehicles) {
-      cache.ensureVehicle(v.id_s, v.vin);
-      await upsertTokenRow(v.vin, v.id_s, {
-        userIdSub: sub,
-        tpToken,
-        refreshToken,
-        idToken,
-        expiresIn: tokenResponse.expires_in
-      });
-    }
 
     /* Commented out environment file update for fallback
     try {
@@ -200,7 +177,7 @@ router.get('/extractToken', async (req: Request, res: Response): Promise<void> =
         token_type: tokenResponse.token_type,
         expires_in: tokenResponse.expires_in
       },
-      vehicles: vehicles.map(v => ({ vin: v.vin, id: v.id_s }))
+      decodedIdToken: decodedToken  // Include decoded token information in response
     });
 
   } catch (err) {

@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'node:path';
 import { config } from 'dotenv';
 import { initialiseDb } from './db';
-import { cache } from './proxy';
 import healthRouter from './routes/health';
 import authRouter from './routes/extractToken';
 import vehiclesRouter from './routes/vehicles';
@@ -28,7 +27,7 @@ app.use('/', vehiclesRouter);
 
 // Boot sequence
 (async () => {
-  await initialiseDb(cache);
+  await initialiseDb();
 })();
 
 app.listen(PORT, () => {

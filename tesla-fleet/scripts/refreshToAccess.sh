@@ -72,7 +72,14 @@ else
   echo "ID_TOKEN='${ID_TOKEN}'" >> "$ENV_FILE"
 fi
 
+# Decode ID_TOKEN and print the payload
+function jwt_decode(){
+    jq -R 'split(".") | .[1] | @base64d | fromjson' <<< "$1"
+}
+
+
 echo "✅ Tokens updated in $ENV_FILE:"
 echo "   TP_TOKEN: ${TP_TOKEN:0:50}..."
 echo "   REFRESH_TOKEN: ${NEW_REFRESH_TOKEN}"
 echo "   ID_TOKEN: ${ID_TOKEN:0:50}..."
+echo "   ID_TOKEN payload: $(jwt_decode "$ID_TOKEN")"
