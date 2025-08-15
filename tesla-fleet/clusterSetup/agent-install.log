@@ -1,0 +1,23 @@
++ K3S_URL=https://10.10.10.100:6443
++ K3S_TOKEN=K1040a1c1c58292099c35459f7610f2be34443b79cf17f3e4e1f07d9253f16bd0d9::server:9468d2c135e5fc888c1cd06fc60c3379
++ curl -sfL https://get.k3s.io
++ sh -s - agent
+[INFO]  Finding release for channel stable
+[INFO]  Using v1.33.3+k3s1 as release
+[INFO]  Downloading hash https://github.com/k3s-io/k3s/releases/download/v1.33.3+k3s1/sha256sum-arm64.txt
+[INFO]  Downloading binary https://github.com/k3s-io/k3s/releases/download/v1.33.3+k3s1/k3s-arm64
+[INFO]  Verifying binary download
+[INFO]  Installing k3s to /usr/local/bin/k3s
+[INFO]  Skipping installation of SELinux RPM
+[INFO]  Creating /usr/local/bin/kubectl symlink to k3s
+[INFO]  Creating /usr/local/bin/crictl symlink to k3s
+[INFO]  Creating /usr/local/bin/ctr symlink to k3s
+[INFO]  Creating killall script /usr/local/bin/k3s-killall.sh
+[INFO]  Creating uninstall script /usr/local/bin/k3s-agent-uninstall.sh
+[INFO]  env: Creating environment file /etc/systemd/system/k3s-agent.service.env
+[INFO]  systemd: Creating service file /etc/systemd/system/k3s-agent.service
+[INFO]  systemd: Enabling k3s-agent unit
+Created symlink /etc/systemd/system/multi-user.target.wants/k3s-agent.service → /etc/systemd/system/k3s-agent.service.
+[INFO]  systemd: Starting k3s-agent
+Job for k3s-agent.service failed because the control process exited with error code.
+See "systemctl status k3s-agent.service" and "journalctl -xeu k3s-agent.service" for details.

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Comprehensive OAuth Test Script
-require('dotenv').config({ path: './fleet.env' });
+require('dotenv').config({ path: '../fleet.env' });
 
 const CLIENT_ID = process.env.CLIENT_ID;
 const NGROK_DOMAIN = process.env.NGROK_DOMAIN;

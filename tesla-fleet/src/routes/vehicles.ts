@@ -1,7 +1,7 @@
 import express, { Router, Request, Response } from 'express';
 import { config } from 'dotenv';
 import fetch from 'node-fetch';
-import { VehicleToken } from '../db';
+import { VehicleToken, refreshToken } from '../db';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -21,6 +21,69 @@ function signWithECKey(data: string): string {
   const sign = crypto.createSign('SHA256');
   sign.update(data);
   return sign.sign(privateKey, 'base64');
+}
+
+// Helper function to execute vehicle command with token refresh
+async function executeVehicleCommand(
+  vehicleToken: any,
+  vin: string,
+  command: string,
+  commandData: string
+): Promise<any> {
+  try {
+    const signature = signWithECKey(commandData);
+    
+    const response = await fetch(
+      `https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/${vin}/command/${command}`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${vehicleToken.accessToken}`,
+          'Content-Type': 'application/json',
+          'X-Signature': signature
+        },
+        body: commandData
+      }
+    );
+
+    // If unauthorized, try refreshing token and retry once
+    if (response.status === 401) {
+      console.log(`🔄 Token expired for ${vin}, attempting refresh...`);
+      const refreshSuccess = await refreshToken(vehicleToken);
+      
+      if (!refreshSuccess) {
+        throw new Error('Token refresh failed');
+      }
+
+      // Retry with new token
+      const retryResponse = await fetch(
+        `https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/${vin}/command/${command}`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${vehicleToken.accessToken}`,
+            'Content-Type': 'application/json',
+            'X-Signature': signature
+          },
+          body: commandData
+        }
+      );
+
+      if (!retryResponse.ok) {
+        throw new Error(`Command failed after token refresh: ${retryResponse.status} ${retryResponse.statusText}`);
+      }
+
+      return await retryResponse.json();
+    }
+
+    if (!response.ok) {
+      throw new Error(`Command failed: ${response.status} ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    throw error;
+  }
 }
 
 // Honk horn endpoint
@@ -44,47 +107,29 @@ router.post('/user/vehicles/honkHorn', async (req: Request, res: Response): Prom
       return;
     }
 
-    const accessToken = vehicleToken.get('accessToken');
-    const vehicleId = vehicleToken.get('vehicleId');
-
-    // Create and sign command data
+    // Create command data
     const commandData = JSON.stringify({
       command: 'honk_horn',
       vin: vin,
       timestamp: Date.now()
     });
 
-    const signature = signWithECKey(commandData);
-
-    const response = await fetch(`https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/${vin}/command/honk_horn`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'X-Signature': signature
-      },
-      body: commandData
-    });
-
-    if (!response.ok) {
-      console.error('Tesla API error:', response.status, response.statusText);
-      res.status(response.status).json({ error: 'Failed to honk horn via Tesla API' });
-      return;
-    }
-
-    const result = await response.json();
+    const result = await executeVehicleCommand(vehicleToken, vin, 'honk_horn', commandData);
+    
     console.log(`✅ Honked horn for vehicle ${vin} (user: ${userId}):`, result);
     
     res.json({
       user_id: userId,
       vin: vin,
-      result: result,
-      signature: signature
+      result: result
     });
 
   } catch (error) {
     console.error('Error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    });
   }
 });
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Analyze OAuth vs Partner Token Generation
-require('dotenv').config({ path: './fleet.env' });
+require('dotenv').config({ path: '../fleet.env' });
 
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;

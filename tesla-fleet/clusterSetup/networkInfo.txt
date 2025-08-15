@@ -1,0 +1,20 @@
+*-network                 
+       description: Ethernet controller
+       product: Virtio network device
+       vendor: Red Hat, Inc.
+       physical id: 1
+       bus info: pci@0000:00:01.0
+       version: 00
+       width: 64 bits
+       clock: 33MHz
+       capabilities: bus_master cap_list rom
+       configuration: driver=virtio-pci latency=0
+       resources: irq:46 ioport:10c0(size=32) memory:10040000-10043fff memory:10000000-1003ffff
+     *-virtio0
+          description: Ethernet interface
+          physical id: 0
+          bus info: virtio@0
+          logical name: enp0s1
+          serial: 52:54:00:e1:11:de
+          capabilities: ethernet physical
+          configuration: autonegotiation=off broadcast=yes driver=virtio_net driverversion=1.0.0 ip=192.168.64.6 link=yes multicast=yes

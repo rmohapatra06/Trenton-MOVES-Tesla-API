@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Load environment variables
-require('dotenv').config({ path: './fleet.env' });
+require('dotenv').config({ path: '../fleet.env' });
 
 const NGROK_DOMAIN = process.env.NGROK_DOMAIN;
 const CLIENT_ID = process.env.CLIENT_ID;

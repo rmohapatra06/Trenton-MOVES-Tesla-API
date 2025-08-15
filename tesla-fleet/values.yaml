@@ -1,0 +1,33 @@
+# values.yaml
+replicaCount: 1
+
+service:
+  type: LoadBalancer
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443    # chart default
+
+tlsSecret:
+  # Name of the Kubernetes TLS secret we created above
+  name: telemetry-tls
+  create: false
+
+config:
+  data:
+    host: "0.0.0.0"
+    port: 8443
+    log_level: "info"
+    json_log_enable: true
+    namespace: "tesla"
+    reliable_ack: false
+    transmit_decoded_records: true
+    records:
+      V: ["logger"]
+      alerts: ["logger"]
+      errors: ["logger"]
+    tls:
+      server_cert: "/etc/certs/server/tls-cert.pem"
+      server_key: "/etc/certs/server/tls-key.pem"
+
+# No need to set server_cert/server_key here—Helm will mount the secret automatically

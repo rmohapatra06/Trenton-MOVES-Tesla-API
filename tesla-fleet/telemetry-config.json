@@ -8,7 +8,7 @@
     "transmit_decoded_records": true,
     "records": { "V": ["logger"], "alerts": ["logger"], "errors": ["logger"] },
     "tls": {
-      "server_cert": "/config/tls-cert.pem",
-      "server_key": "/config/tls-key.pem"
+      "server_cert": "/etc/certs/server/tls-cert.pem",
+      "server_key": "/etc/certs/server/tls-key.pem"
     }
   }

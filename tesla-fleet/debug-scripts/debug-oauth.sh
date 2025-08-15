@@ -8,7 +8,7 @@ echo "🔍 Tesla OAuth Debug Script"
 echo "============================"
 
 # --- load secrets ---
-ENV_FILE="$(dirname "$0")/fleet.env"
+ENV_FILE="$(dirname "$0")/../fleet.env"
 if [[ -f $ENV_FILE ]]; then
   echo "✅ Loading environment variables from: $ENV_FILE"
   set -a

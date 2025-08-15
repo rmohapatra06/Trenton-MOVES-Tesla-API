@@ -40,6 +40,25 @@ The content is organized as follows:
 </file_summary>
 
 <directory_structure>
+clusterSetup/
+  agentK3s.sh
+  haproxySetup.sh
+  installControlPlaneDB.sh
+  keepAlived.sh
+  launchVM.sh
+  multipassItems.txt
+  networkInfo.txt
+debug-scripts/
+  add-shebang-and-chmod.sh
+  analyze-oauth-vs-partner.js
+  comprehensive-oauth-test.js
+  debug-oauth.sh
+  revert-to-vehicle-id.sh
+  setup-tesla-integration.sh
+  test-integration.js
+  test-oauth-url.js
+  tlskeygen.sh
+  update-vehicle-id.sh
 scripts/
   authCodeTokenReq
   confirmPublicKey
@@ -178,26 +197,867 @@ vehicleReq/
     warranty_details
   mapsReq.js
 .gitignore
-analyze-oauth-vs-partner.js
-comprehensive-oauth-test.js
-debug-oauth.sh
 directory.php
 docker-compose.yml
 Dockerfile
+nginx.conf
 package.json
 README.md
-revert-to-vehicle-id.sh
-setup-tesla-integration.sh
 telemetry-config.json
-test-integration.js
-test-oauth-url.js
-tlskeygen.sh
 tsconfig.json
-update-vehicle-id.sh
+values.yaml
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="clusterSetup/agentK3s.sh">
+multipass exec agent-1 -- sudo bash -lc '
+  echo "⏳ Joining worker node to https://10.10.10.100:6443"
+  curl -sfL https://get.k3s.io | sh -s - \
+    agent \
+    --server https://10.10.10.100:6443 \
+    --token '"$K3S_TOKEN"'
+'
+</file>
+
+<file path="clusterSetup/haproxySetup.sh">
+sudo tee /etc/haproxy/haproxy.cfg <<EOF
+frontend k3s-frontend
+    bind *:6443
+    mode tcp
+    option tcplog
+    default_backend k3s-backend
+
+backend k3s-backend
+    mode tcp
+    option tcp-check
+    balance roundrobin
+    default-server inter 10s downinter 5s rise 2 fall 3
+    server server-1 192.168.64.2:6443 check
+    server server-2 192.168.64.3:6443 check
+    server server-3 192.168.64.4:6443 check
+EOF
+</file>
+
+<file path="clusterSetup/installControlPlaneDB.sh">
+multipass exec postgres-ha -- bash -c '
+  sudo apt-get update -qq
+  sudo apt-get install -y postgresql
+  sudo -u postgres psql -c "CREATE DATABASE k3s_cluster;"
+  sudo -u postgres psql -c "CREATE USER k3s_user WITH ENCRYPTED PASSWORD '\''cmbo**77^!'\'';"
+  sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE k3s_cluster TO k3s_user;"
+  sudo sed -i "s/#listen_addresses.*/listen_addresses='\''*'\''/" /etc/postgresql/*/main/postgresql.conf
+  echo \"host all all 0.0.0.0/0 md5\" | sudo tee -a /etc/postgresql/*/main/pg_hba.conf
+  sudo systemctl restart postgresql
+'
+</file>
+
+<file path="clusterSetup/keepAlived.sh">
+sudo tee /etc/keepalived/keepalived.conf <<EOF
+global_defs {
+    enable_script_security
+    script_user root
+    max_auto_priority 50
+}
+
+vrrp_script chk_haproxy {
+    script "/usr/bin/pgrep haproxy"
+    interval 2
+    weight 2
+}
+# put your own interface by inspecting your network on VM for proper interface config
+vrrp_instance k3s-vip {
+    state MASTER
+    interface enp0s1
+    virtual_router_id 51
+    priority 200
+    advert_int 1
+
+    authentication {
+        auth_type PASS
+        auth_pass cmbo77 #keep under 8 char for spec compliance 
+    }
+
+    virtual_ipaddress {
+        10.10.10.100/24
+    }
+
+    track_script {
+        chk_haproxy
+    }
+}
+EOF
+</file>
+
+<file path="clusterSetup/launchVM.sh">
+# Control plane
+for n in 1 2 3; do
+  multipass launch 22.04 --name server-$n --cpus 2 --memory 2G --disk 10G
+done
+
+# Workers
+multipass launch 22.04 --name agent-1 --cpus 2 --memory 2G --disk 10G
+
+# Load balancers
+for n in 1 2; do
+  multipass launch 22.04 --name lb-$n --cpus 1 --memory 512M --disk 5G
+done
+
+# External Postgres for the control‑plane datastore
+multipass launch 22.04 --name postgres-ha --cpus 1 --memory 1G --disk 5G
+</file>
+
+<file path="clusterSetup/multipassItems.txt">
+Name                    State             IPv4             Image
+agent-1                 Running           192.168.64.5     Ubuntu 22.04 LTS
+lb-1                    Running           192.168.64.6     Ubuntu 22.04 LTS
+lb-2                    Running           192.168.64.7     Ubuntu 22.04 LTS
+postgres-ha             Running           192.168.64.8     Ubuntu 22.04 LTS
+server-1                Running           192.168.64.2     Ubuntu 22.04 LTS
+server-2                Running           192.168.64.3     Ubuntu 22.04 LTS
+server-3                Running           192.168.64.4     Ubuntu 22.04 LTS
+</file>
+
+<file path="clusterSetup/networkInfo.txt">
+*-network                 
+       description: Ethernet controller
+       product: Virtio network device
+       vendor: Red Hat, Inc.
+       physical id: 1
+       bus info: pci@0000:00:01.0
+       version: 00
+       width: 64 bits
+       clock: 33MHz
+       capabilities: bus_master cap_list rom
+       configuration: driver=virtio-pci latency=0
+       resources: irq:46 ioport:10c0(size=32) memory:10040000-10043fff memory:10000000-1003ffff
+     *-virtio0
+          description: Ethernet interface
+          physical id: 0
+          bus info: virtio@0
+          logical name: enp0s1
+          serial: 52:54:00:e1:11:de
+          capabilities: ethernet physical
+          configuration: autonegotiation=off broadcast=yes driver=virtio_net driverversion=1.0.0 ip=192.168.64.6 link=yes multicast=yes
+</file>
+
+<file path="debug-scripts/add-shebang-and-chmod.sh">
+#!/bin/bash
+
+# Change to the tesla-fleet directory
+cd tesla-fleet || exit 1
+
+# Directories to process
+DIRS=(
+  "vehicleReq/vehicleCommands"
+  "vehicleReq/vehicleEndpoints"
+  "vehicleReq/userEndpoints"
+  "vehicleReq/charging"
+)
+
+# Function to process a file
+process_file() {
+  local file="$1"
+  
+  # Check if file already has shebang
+  if ! head -n1 "$file" | grep -q "^#!"; then
+    # Create temp file
+    temp_file=$(mktemp)
+    echo '#!/usr/bin/env node' > "$temp_file"
+    cat "$file" >> "$temp_file"
+    mv "$temp_file" "$file"
+    echo "Added shebang to $file"
+  fi
+  
+  # Make file executable
+  chmod +x "$file"
+  echo "Made executable: $file"
+}
+
+# Process each directory
+for dir in "${DIRS[@]}"; do
+  echo "Processing directory: $dir"
+  
+  # Process all files in directory
+  for file in "$dir"/*; do
+    if [ -f "$file" ]; then
+      process_file "$file"
+    fi
+  done
+done
+
+echo "All files processed!"
+</file>
+
+<file path="debug-scripts/analyze-oauth-vs-partner.js">
+#!/usr/bin/env node
+
+// Analyze OAuth vs Partner Token Generation
+require('dotenv').config({ path: '../fleet.env' });
+
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
+const NGROK_DOMAIN = process.env.NGROK_DOMAIN;
+
+console.log('🔍 OAuth vs Partner Token Analysis');
+console.log('==================================');
+console.log('');
+
+console.log('📋 Same CLIENT_ID used in both flows:');
+console.log(`   CLIENT_ID: ${CLIENT_ID}`);
+console.log('');
+
+console.log('🔄 Partner Token Generation (WORKS):');
+console.log('   Endpoint: https://auth.tesla.com/oauth2/v3/token');
+console.log('   Method: POST');
+console.log('   Grant Type: client_credentials');
+console.log('   Audience: https://fleet-api.prd.na.vn.cloud.tesla.com');
+console.log('   Scope: openid vehicle_device_data vehicle_cmds vehicle_charging_cmds');
+console.log('   No redirect_uri needed');
+console.log('');
+
+console.log('❌ OAuth Flow (FAILS):');
+console.log('   Endpoint: https://auth.tesla.com/oauth2/v3/authorize');
+console.log('   Method: GET');
+console.log('   Grant Type: authorization_code');
+console.log('   Redirect URI: https://major-charmed-parakeet.ngrok-free.app/extractToken');
+console.log('   Scope: openid user_data offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds');
+console.log('');
+
+console.log('🔍 Key Differences:');
+console.log('');
+console.log('1. **Grant Type**:');
+console.log('   - Partner: client_credentials (server-to-server)');
+console.log('   - OAuth: authorization_code (user authorization)');
+console.log('');
+
+console.log('2. **Scope Differences**:');
+console.log('   - Partner: openid vehicle_device_data vehicle_cmds vehicle_charging_cmds');
+console.log('   - OAuth: openid user_data offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds');
+console.log('   - OAuth has additional scopes: user_data, offline_access');
+console.log('');
+
+console.log('3. **Redirect URI**:');
+console.log('   - Partner: Not required');
+console.log('   - OAuth: Required and must be pre-registered');
+console.log('');
+
+console.log('4. **Authentication Flow**:');
+console.log('   - Partner: Direct server authentication');
+console.log('   - OAuth: User consent flow');
+console.log('');
+
+console.log('💡 **Most Likely Causes**:');
+console.log('');
+console.log('1. **Missing OAuth Scopes**:');
+console.log('   Your Tesla app might not be approved for the additional OAuth scopes:');
+console.log('   - user_data');
+console.log('   - offline_access');
+console.log('   Try removing these scopes from the OAuth URL');
+console.log('');
+
+console.log('2. **OAuth vs Partner App Configuration**:');
+console.log('   Tesla might have separate configurations for:');
+console.log('   - Partner API access (what works)');
+console.log('   - OAuth user flows (what fails)');
+console.log('');
+
+console.log('3. **App Type Mismatch**:');
+console.log('   Your app might be configured for:');
+console.log('   - Server-to-server communication (partner tokens)');
+console.log('   - But not for user OAuth flows');
+console.log('');
+
+console.log('🔧 **Solutions to Try**:');
+console.log('');
+console.log('1. **Try OAuth with partner scopes only**:');
+const oauthPartnerScopes = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=user_id=test-user-id`;
+console.log(`   ${oauthPartnerScopes}`);
+console.log('');
+
+console.log('2. **Check Tesla Developer Portal for OAuth settings**:');
+console.log('   - Look for "OAuth Configuration" or "User Authorization" settings');
+console.log('   - Check if OAuth flows are enabled for your app');
+console.log('   - Verify OAuth scopes are approved');
+console.log('');
+
+console.log('3. **Contact Tesla Developer Support**:');
+console.log('   - Ask about OAuth vs Partner API configuration differences');
+console.log('   - Inquire about required app settings for user OAuth flows');
+console.log('');
+
+console.log('4. **Alternative: Use Partner Token Only**:');
+console.log('   - If OAuth continues to fail, you might be able to use');
+console.log('   - Partner tokens for vehicle commands without user OAuth');
+console.log('   - This depends on your specific use case');
+</file>
+
+<file path="debug-scripts/comprehensive-oauth-test.js">
+#!/usr/bin/env node
+
+// Comprehensive OAuth Test Script
+require('dotenv').config({ path: '../fleet.env' });
+
+const CLIENT_ID = process.env.CLIENT_ID;
+const NGROK_DOMAIN = process.env.NGROK_DOMAIN;
+
+console.log('🔍 Comprehensive OAuth Test');
+console.log('============================');
+console.log('');
+
+// Test 1: Basic OAuth URL (what you're currently using)
+console.log('1️⃣  Current OAuth URL:');
+const currentOauthUrl = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=user_id=test-user-id`;
+console.log(currentOauthUrl);
+console.log('');
+
+// Test 2: Alternative OAuth URL (without state parameter)
+console.log('2️⃣  OAuth URL without state parameter:');
+const oauthUrlNoState = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds`;
+console.log(oauthUrlNoState);
+console.log('');
+
+// Test 3: OAuth URL with different scope format
+console.log('3️⃣  OAuth URL with different scope format:');
+const oauthUrlAltScope = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid+user_data+offline_access+vehicle_device_data+vehicle_cmds+vehicle_charging_cmds&state=user_id=test-user-id`;
+console.log(oauthUrlAltScope);
+console.log('');
+
+// Test 4: OAuth URL with minimal scope
+console.log('4️⃣  OAuth URL with minimal scope:');
+const oauthUrlMinimalScope = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20vehicle_device_data%20vehicle_cmds&state=user_id=test-user-id`;
+console.log(oauthUrlMinimalScope);
+console.log('');
+
+// Test 5: OAuth URL with different redirect URI format
+console.log('5️⃣  OAuth URL with different redirect URI:');
+const oauthUrlAltRedirect = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(`https://${NGROK_DOMAIN}/extractToken`)}&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=user_id=test-user-id`;
+console.log(oauthUrlAltRedirect);
+console.log('');
+
+// Test 6: Check if there are any special characters in the client ID
+console.log('6️⃣  Client ID Analysis:');
+console.log(`   Raw CLIENT_ID: ${CLIENT_ID}`);
+console.log(`   Length: ${CLIENT_ID.length}`);
+console.log(`   Contains special chars: ${/[^a-zA-Z0-9-]/.test(CLIENT_ID)}`);
+console.log(`   Format check: ${/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(CLIENT_ID) ? 'Valid UUID format' : 'Not UUID format'}`);
+console.log('');
+
+// Test 7: Check ngrok domain format
+console.log('7️⃣  Ngrok Domain Analysis:');
+console.log(`   Raw NGROK_DOMAIN: ${NGROK_DOMAIN}`);
+console.log(`   Length: ${NGROK_DOMAIN.length}`);
+console.log(`   Contains ngrok-free.app: ${NGROK_DOMAIN.includes('ngrok-free.app')}`);
+console.log(`   Starts with https://: ${NGROK_DOMAIN.startsWith('https://')}`);
+console.log('');
+
+// Test 8: Alternative OAuth endpoints to try
+console.log('8️⃣  Alternative OAuth Endpoints:');
+console.log('   Standard: https://auth.tesla.com/oauth2/v3/authorize');
+console.log('   Alternative 1: https://auth.tesla.com/oauth2/authorize');
+console.log('   Alternative 2: https://auth.tesla.com/oauth2/v2/authorize');
+console.log('');
+
+// Test 9: Different response_type values
+console.log('9️⃣  Different response_type values to try:');
+console.log('   Current: response_type=code');
+console.log('   Alternative: response_type=token');
+console.log('');
+
+console.log('🔧 Additional Troubleshooting Steps:');
+console.log('');
+console.log('1. **Try different browsers**: Chrome, Firefox, Safari, Edge');
+console.log('2. **Clear browser cache and cookies**');
+console.log('3. **Try incognito/private browsing mode**');
+console.log('4. **Check if your Tesla account has Fleet API access**');
+console.log('5. **Verify your Tesla app is in the correct environment (dev/prod)**');
+console.log('6. **Check if there are any IP restrictions on your Tesla app**');
+console.log('7. **Try the OAuth URL from a different network/location**');
+console.log('8. **Check Tesla developer portal for any error messages or warnings**');
+console.log('9. **Verify your Tesla account email matches the one in your developer portal**');
+console.log('10. **Try creating a new Tesla app in the developer portal**');
+console.log('');
+console.log('💡 **Most Likely Issues**:');
+console.log('   - Tesla app environment mismatch (dev vs prod)');
+console.log('   - IP restrictions on your Tesla app');
+console.log('   - Tesla account not approved for Fleet API');
+console.log('   - Browser cache/cookie issues');
+console.log('   - Network/firewall blocking Tesla OAuth');
+</file>
+
+<file path="debug-scripts/debug-oauth.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Tesla OAuth Debug Script
+# This script helps diagnose OAuth "unauthorized_client" errors
+
+echo "🔍 Tesla OAuth Debug Script"
+echo "============================"
+
+# --- load secrets ---
+ENV_FILE="$(dirname "$0")/../fleet.env"
+if [[ -f $ENV_FILE ]]; then
+  echo "✅ Loading environment variables from: $ENV_FILE"
+  set -a
+  source "$ENV_FILE"
+  set +a
+else
+  echo "❌ Env file not found: $ENV_FILE" >&2
+  exit 1
+fi
+
+echo ""
+echo "📋 Current Configuration:"
+echo "   CLIENT_ID: $CLIENT_ID"
+echo "   NGROK_DOMAIN: $NGROK_DOMAIN"
+echo "   REDIRECT_URI: https://${NGROK_DOMAIN}/extractToken"
+echo ""
+
+# Test 1: Check if server is running
+echo "1️⃣  Checking server status..."
+if curl -s http://localhost:3000/health > /dev/null 2>&1; then
+  echo "✅ Server is running on localhost:3000"
+else
+  echo "❌ Server is not running"
+  echo "   Please start the server: cd tesla-fleet && npm start"
+  exit 1
+fi
+
+# Test 2: Check if ngrok domain is accessible
+echo ""
+echo "2️⃣  Checking ngrok domain accessibility..."
+if curl -s "https://${NGROK_DOMAIN}/health" > /dev/null 2>&1; then
+  echo "✅ Ngrok domain is accessible: https://${NGROK_DOMAIN}"
+else
+  echo "❌ Ngrok domain is not accessible: https://${NGROK_DOMAIN}"
+  echo "   Please check if ngrok is running: ngrok http 3000"
+  exit 1
+fi
+
+# Test 3: Test partner token generation (this should work even if OAuth doesn't)
+echo ""
+echo "3️⃣  Testing partner token generation..."
+TOKEN_RESPONSE=$(curl -s --request POST \
+  --header 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'grant_type=client_credentials' \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "client_secret=$CLIENT_SECRET" \
+  --data-urlencode 'scope=openid vehicle_device_data vehicle_cmds vehicle_charging_cmds' \
+  --data-urlencode "audience=https://fleet-api.prd.na.vn.cloud.tesla.com" \
+  'https://auth.tesla.com/oauth2/v3/token')
+
+if echo "$TOKEN_RESPONSE" | grep -q "access_token"; then
+  echo "✅ Partner token generation successful"
+  echo "   This confirms your CLIENT_ID and CLIENT_SECRET are valid"
+else
+  echo "❌ Partner token generation failed"
+  echo "   Response: $TOKEN_RESPONSE"
+  echo "   This suggests your CLIENT_ID or CLIENT_SECRET may be incorrect"
+  exit 1
+fi
+
+# Test 4: Generate and display the exact OAuth URL
+echo ""
+echo "4️⃣  Generated OAuth URL:"
+OAUTH_URL="https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=user_id=test-user-id"
+echo "   $OAUTH_URL"
+echo ""
+
+# Test 5: Check if extractToken endpoint is accessible
+echo "5️⃣  Testing extractToken endpoint accessibility..."
+if curl -s "https://${NGROK_DOMAIN}/extractToken" > /dev/null 2>&1; then
+  echo "✅ extractToken endpoint is accessible"
+else
+  echo "❌ extractToken endpoint is not accessible"
+  echo "   This could be causing the OAuth redirect to fail"
+fi
+
+echo ""
+echo "🔧 Troubleshooting Steps:"
+echo ""
+echo "1. **Check Tesla Developer Portal Configuration:**"
+echo "   - Go to: https://developer.tesla.com/"
+echo "   - Find your app and check 'Allowed Redirect URIs'"
+echo "   - Make sure it includes: https://${NGROK_DOMAIN}/extractToken"
+echo "   - The URI must match EXACTLY (including /extractToken)"
+echo ""
+echo "2. **Verify App Status:**"
+echo "   - Check if your app is approved for Fleet API access"
+echo "   - Ensure your app is active and not suspended"
+echo ""
+echo "3. **Check Client ID:**"
+echo "   - Verify the CLIENT_ID in fleet.env matches your Tesla developer portal"
+echo "   - Make sure you're using the correct app's credentials"
+echo ""
+echo "4. **Common Issues:**"
+echo "   - Missing /extractToken in redirect URI"
+echo "   - Wrong ngrok domain in developer portal"
+echo "   - App not approved for Fleet API"
+echo "   - Using wrong client credentials"
+echo ""
+echo "5. **Test with Different Redirect URI:**"
+echo "   Try adding this to your Tesla developer portal:"
+echo "   https://${NGROK_DOMAIN}/extractToken"
+echo ""
+echo "6. **Alternative Test:**"
+echo "   Try the OAuth URL in an incognito/private browser window"
+echo "   Sometimes browser cache can cause issues"
+</file>
+
+<file path="debug-scripts/revert-to-vehicle-id.sh">
+#!/bin/bash
+
+# Function to process a file
+process_file() {
+    local file="$1"
+    # Replace the variable name but keep the environment variable name
+    sed -i '' 's/const vin = process\.env\.VIN/const vin = process.env.TESLA_VEHICLE_ID/' "$file"
+    sed -i '' 's/${process\.env\.VIN}/${process.env.TESLA_VEHICLE_ID}/g' "$file"
+    sed -i '' 's/env\.VIN/env.TESLA_VEHICLE_ID/g' "$file"
+    echo "Reverted $file"
+}
+
+# Process all files in vehicleCommands
+for file in vehicleReq/vehicleCommands/*; do
+    if [ -f "$file" ]; then
+        process_file "$file"
+    fi
+done
+
+# Process all files in vehicleEndpoints
+for file in vehicleReq/vehicleEndpoints/*; do
+    if [ -f "$file" ]; then
+        process_file "$file"
+    fi
+done
+
+# Process all files in charging
+for file in vehicleReq/charging/*; do
+    if [ -f "$file" ]; then
+        process_file "$file"
+    fi
+done
+
+# Process mapsReq.js separately
+process_file "vehicleReq/mapsReq.js"
+
+echo "All files have been reverted to use TESLA_VEHICLE_ID instead of VIN"
+</file>
+
+<file path="debug-scripts/setup-tesla-integration.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Tesla Fleet API Third-Party OAuth Setup Script
+# This script helps you set up and test the third-party (ownerapi) OAuth flow
+
+echo "🚗 Tesla Fleet API Third-Party OAuth Setup"
+echo "==========================================="
+
+# --- load secrets ---
+ENV_FILE="$(dirname "$0")/../fleet.env"
+if [[ -f $ENV_FILE ]]; then
+  echo "✅ Loading environment variables from: $ENV_FILE"
+  set -a
+  source "$ENV_FILE"
+  set +a
+else
+  echo "❌ Env file not found: $ENV_FILE" >&2
+  exit 1
+fi
+
+# Check required variables
+if [[ -z "${NGROK_DOMAIN:-}" ]]; then
+  echo "❌ NGROK_DOMAIN is not set" >&2
+  exit 1
+fi
+
+echo "✅ Environment variables loaded successfully"
+echo "   NGROK_DOMAIN: $NGROK_DOMAIN"
+echo ""
+
+# Step 1: Check if server is running
+echo "1️⃣  Checking if server is running..."
+if curl -s http://localhost:3000/health > /dev/null 2>&1; then
+  echo "✅ Server is running on localhost:3000"
+else
+  echo "❌ Server is not running. Please start the server first:"
+  echo "   cd tesla-fleet && npm start"
+  exit 1
+fi
+
+# Step 2: Check if ngrok domain is accessible
+echo ""
+echo "2️⃣  Checking ngrok domain accessibility..."
+if curl -s "https://${NGROK_DOMAIN}/health" > /dev/null 2>&1; then
+  echo "✅ Ngrok domain is accessible: https://${NGROK_DOMAIN}"
+else
+  echo "❌ Ngrok domain is not accessible: https://${NGROK_DOMAIN}"
+  echo "   Please check if ngrok is running: ngrok http 3000"
+  exit 1
+fi
+
+# Step 2.5: Check if the Client ID has been imported correctly
+echo "2.5️⃣  Checking if the Client ID has been imported correctly..."
+echo "   Client ID: $CLIENT_ID"
+
+# Step 3: Remind user to register redirect URI
+echo ""
+echo "3️⃣  Register your redirect URI in the Tesla developer portal:"
+echo "   https://${NGROK_DOMAIN}/extractToken"
+echo "   (Go to your Tesla developer portal and add this as an allowed redirect URI)"
+echo ""
+
+# Step 4: Generate and display the OAuth URL for third-party flow
+echo "4️⃣  Generated OAuth URL (Third-Party):"
+RAND_STATE=$(openssl rand -hex 32)
+OAUTH_URL="https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/authorize?&client_id=${CLIENT_ID}&locale=en-US&prompt=login&redirect_uri=https%3A%2F%2F${NGROK_DOMAIN}%2FextractToken&response_type=code&scope=openid%20vehicle_device_data%20offline_access%20vehicle_cmds%20vehicle_location%20user_data&state=${RAND_STATE}"
+echo "   $OAUTH_URL"
+echo ""
+echo "   1. Open this URL in your browser"
+echo "   2. Log in and consent"
+echo "   3. Tesla will redirect to /extractToken with a code parameter"
+echo "   4. Your backend will exchange the code for tokens (handled automatically)"
+echo ""
+echo "🎉 Setup completed for Tesla third-party OAuth!"
+echo ""
+echo "📋 Next Steps:"
+echo "- Use the access token returned from /extractToken to call the Fleet API"
+echo "- See README.md for more details"
+echo ""
+</file>
+
+<file path="debug-scripts/test-integration.js">
+#!/usr/bin/env node
+
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+// Load environment variables
+require('dotenv').config({ path: '../fleet.env' });
+
+const NGROK_DOMAIN = process.env.NGROK_DOMAIN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+
+console.log('🚗 Tesla Fleet API Integration Test\n');
+
+// Test 1: Check if server is running
+console.log('1️⃣  Testing server health...');
+try {
+  const healthResponse = execSync(`curl -s http://localhost:3000/health`, { encoding: 'utf8' });
+  console.log('✅ Server is running:', healthResponse.trim());
+} catch (error) {
+  console.log('❌ Server is not running. Please start the server first.');
+  process.exit(1);
+}
+
+// Test 2: Verify key files exist
+console.log('\n2️⃣  Verifying key files...');
+const privateKeyPath = path.join(__dirname, 'keys', 'private-key.pem');
+const publicKeyPath = path.join(__dirname, 'public', '.well-known', 'appspecific', 'com.tesla.3p.public-key.pem');
+
+if (fs.existsSync(privateKeyPath)) {
+  console.log('✅ Private key found:', privateKeyPath);
+} else {
+  console.log('❌ Private key not found:', privateKeyPath);
+}
+
+if (fs.existsSync(publicKeyPath)) {
+  console.log('✅ Public key found:', publicKeyPath);
+} else {
+  console.log('❌ Public key not found:', publicKeyPath);
+}
+
+// Test 3: Test key verification endpoint
+console.log('\n3️⃣  Testing key verification endpoint...');
+try {
+  const keyVerifyResponse = execSync(`curl -s https://${NGROK_DOMAIN}/user/vehicles/verify-keys`, { encoding: 'utf8' });
+  const keyVerifyData = JSON.parse(keyVerifyResponse);
+  console.log('✅ Key verification:', keyVerifyData);
+} catch (error) {
+  console.log('❌ Key verification failed:', error.message);
+}
+
+// Test 4: Test user registration (Step 7)
+console.log('\n4️⃣  Testing user registration...');
+try {
+  const registerResponse = execSync(`curl -s -X POST https://${NGROK_DOMAIN}/user/auth/register \
+    -H "Content-Type: application/json" \
+    -d '{"email": "rishabh.mohapatra@gmail.com", "password": "Tbf14&*7pr!7=^"}'`, { encoding: 'utf8' });
+  
+  const registerData = JSON.parse(registerResponse);
+  console.log('✅ User registered successfully:', registerData);
+  
+  if (registerData.user_id) {
+    console.log(`📝 User ID: ${registerData.user_id}`);
+    console.log(`📝 Save this user_id for the next steps!`);
+  }
+} catch (error) {
+  console.log('❌ User registration failed:', error.message);
+}
+
+// Test 5: Test OAuth URL generation (Step 9)
+console.log('\n5️⃣  Generating OAuth URL...');
+if (process.argv.includes('--user-id')) {
+  const userId = process.argv[process.argv.indexOf('--user-id') + 1];
+  const oauthUrl = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=user_id=${userId}`;
+  console.log('🔗 OAuth URL:', oauthUrl);
+  console.log('📝 Open this URL in your browser to complete OAuth flow');
+} else {
+  console.log('⚠️  Run with --user-id <YOUR_USER_ID> to generate OAuth URL');
+}
+
+// Test 6: Test vehicle pairing URL (Step 6)
+console.log('\n6️⃣  Vehicle pairing URL...');
+const pairingUrl = `https://tesla.com/_ak/${NGROK_DOMAIN}`;
+console.log('🔗 Vehicle pairing URL:', pairingUrl);
+console.log('📝 Open this URL on the same device as your Tesla mobile app');
+
+// Test 7: Test getVehicles endpoint (Step 10)
+console.log('\n7️⃣  Testing getVehicles endpoint...');
+if (process.argv.includes('--user-id')) {
+  const userId = process.argv[process.argv.indexOf('--user-id') + 1];
+  try {
+    const vehiclesResponse = execSync(`curl -s https://${NGROK_DOMAIN}/user/vehicles/getVehicles/${userId}`, { encoding: 'utf8' });
+    const vehiclesData = JSON.parse(vehiclesResponse);
+    console.log('✅ Vehicles retrieved:', vehiclesData);
+  } catch (error) {
+    console.log('❌ Failed to get vehicles:', error.message);
+  }
+} else {
+  console.log('⚠️  Run with --user-id <YOUR_USER_ID> to test getVehicles');
+}
+
+// Test 8: Test honk horn endpoint
+console.log('\n8️⃣  Testing honk horn endpoint...');
+if (process.argv.includes('--user-id') && process.argv.includes('--vin')) {
+  const userId = process.argv[process.argv.indexOf('--user-id') + 1];
+  const vin = process.argv[process.argv.indexOf('--vin') + 1];
+  try {
+    const honkResponse = execSync(`curl -s -X POST https://${NGROK_DOMAIN}/user/vehicles/honkHorn \
+      -H "Content-Type: application/json" \
+      -d '{"user_id": "${userId}", "vin": "${vin}"}'`, { encoding: 'utf8' });
+    const honkData = JSON.parse(honkResponse);
+    console.log('✅ Honk horn response:', honkData);
+  } catch (error) {
+    console.log('❌ Failed to honk horn:', error.message);
+  }
+} else {
+  console.log('⚠️  Run with --user-id <YOUR_USER_ID> --vin <YOUR_VIN> to test honk horn');
+}
+
+console.log('\n📋 Summary:');
+console.log('• Make sure your server is running on localhost:3000');
+console.log('• Make sure ngrok is running and pointing to localhost:3000');
+console.log('• Verify your key files are in the correct locations');
+console.log('• Update your Tesla developer portal with the ngrok domain');
+console.log('• Complete the OAuth flow to get user-specific tokens');
+console.log('• Pair your vehicle key using the pairing URL');
+console.log('• Test vehicle commands with your user_id and VIN');
+
+console.log('\n🔧 Usage examples:');
+console.log('node test-integration.js --user-id <YOUR_USER_ID>');
+console.log('node test-integration.js --user-id <YOUR_USER_ID> --vin <YOUR_VIN>');
+</file>
+
+<file path="debug-scripts/test-oauth-url.js">
+#!/usr/bin/env node
+
+// Test OAuth URL Generation for Tesla Fleet API (official client_id)
+require('dotenv').config({ path: '../fleet.env' });
+
+const CLIENT_ID = process.env.CLIENT_ID;
+const NGROK_DOMAIN = process.env.NGROK_DOMAIN;
+
+console.log('🔍 OAuth URL Test (Official Tesla Fleet API)');
+console.log('=================');
+console.log('');
+console.log('📋 Configuration:');
+console.log(`   CLIENT_ID: ${CLIENT_ID}`);
+console.log(`   NGROK_DOMAIN: ${NGROK_DOMAIN}`);
+console.log('');
+
+// Generate the exact OAuth URL for official flow
+const oauthUrl = `https://auth.tesla.com/oauth2/v3/authorize?client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&response_type=code&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=test`;
+
+console.log('🔗 Generated OAuth URL:');
+console.log(oauthUrl);
+console.log('');
+
+// Break down the URL components
+console.log('📝 URL Components:');
+console.log(`   Base URL: https://auth.tesla.com/oauth2/v3/authorize`);
+console.log(`   response_type: code`);
+console.log(`   client_id: ${CLIENT_ID}`);
+console.log(`   redirect_uri: https://${NGROK_DOMAIN}/extractToken`);
+console.log(`   scope: openid user_data offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds`);
+console.log(`   state: test`);
+console.log('');
+
+console.log('🔧 Troubleshooting Checklist:');
+console.log('');
+console.log('1. ✅ Register your redirect_uri in the Tesla developer portal');
+console.log('2. ✅ Use your official client_id for OAuth');
+console.log('3. ✅ Use scopes: openid email offline_access');
+console.log('4. ✅ Try the URL in an incognito browser window');
+console.log('');
+console.log('💡 This is the official Tesla Fleet API OAuth flow.');
+</file>
+
+<file path="debug-scripts/tlskeygen.sh">
+openssl req -x509 -nodes -newkey ec \
+    -pkeyopt ec_paramgen_curve:secp384r1 \
+    -pkeyopt ec_param_enc:named_curve  \
+    -subj '/CN=localhost' \
+    -keyout config/tls-key.pem -out config/tls-cert.pem -sha256 -days 3650 \
+    -addext "extendedKeyUsage = serverAuth" \
+    -addext "keyUsage = digitalSignature, keyCertSign, keyAgreement"
+</file>
+
+<file path="debug-scripts/update-vehicle-id.sh">
+#!/bin/bash
+
+# Function to process a file
+process_file() {
+    local file="$1"
+    # Replace the variable name but keep the environment variable name
+    sed -i '' 's/const vin = process\.env\.TESLA_VEHICLE_ID/const vin = process.env.VIN/' "$file"
+    sed -i '' 's/${process\.env\.TESLA_VEHICLE_ID}/${process.env.VIN}/g' "$file"
+    sed -i '' 's/env\.TESLA_VEHICLE_ID/env.VIN/g' "$file"
+    echo "Updated $file"
+}
+
+# Process all files in vehicleCommands
+for file in vehicleReq/vehicleCommands/*; do
+    if [ -f "$file" ]; then
+        process_file "$file"
+    fi
+done
+
+# Process all files in vehicleEndpoints
+for file in vehicleReq/vehicleEndpoints/*; do
+    if [ -f "$file" ]; then
+        process_file "$file"
+    fi
+done
+
+# Process all files in charging
+for file in vehicleReq/charging/*; do
+    if [ -f "$file" ]; then
+        process_file "$file"
+    fi
+done
+
+# Process mapsReq.js separately
+process_file "vehicleReq/mapsReq.js"
+
+echo "All files have been updated to use VIN instead of TESLA_VEHICLE_ID"
+</file>
 
 <file path="scripts/authCodeTokenReq">
 #!/usr/bin/env bash
@@ -1260,6 +2120,8 @@ config({ path: path.join(__dirname, '../../fleet.env') });
 
 const router = Router();
 
+const BASE_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
+
 interface TokenResponse {
   access_token: string;
   refresh_token: string;
@@ -1268,21 +2130,173 @@ interface TokenResponse {
   expires_in: number;
 }
 
+interface UserInfo {
+  email: string;
+  full_name: string;
+}
+
+interface Vehicle {
+  vin: string;
+  id: string;
+  vehicle_id: string;
+}
+
+interface VehicleResponse {
+  response: Vehicle[];
+}
+
+// Helper function to fetch user info
+async function fetchUserInfo(accessToken: string): Promise<UserInfo> {
+  const response = await fetch(`${BASE_URL}/api/1/users/me`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch user info: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json() as UserInfo;
+  return data;
+}
+
+// Helper function to fetch vehicle list
+async function fetchVehicleList(accessToken: string): Promise<Vehicle[]> {
+  const response = await fetch(`${BASE_URL}/api/1/vehicles`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch vehicle list: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json() as VehicleResponse;
+  return data.response || [];
+}
+
 // helper
 async function storeTokens(
-  { userIdSub, tpToken, refreshToken, idToken, expiresIn }: {
-    userIdSub: string, tpToken: string, refreshToken: string,
+  { userId, tpToken, refreshToken, idToken, expiresIn }: {
+    userId: string, tpToken: string, refreshToken: string,
     idToken: string, expiresIn: number }
 ) {
-  await VehicleToken.upsert({
-    userId: userIdSub,
-    vin: null,  // No vehicle info for now
-    vehicleId: null,  // No vehicle info for now
-    idToken,
-    accessToken: tpToken,
-    refreshToken,
-    expiresAt: new Date(Date.now() + expiresIn * 1000),
+  // Check if user already exists first
+  const existingUser = await VehicleToken.findOne({
+    where: { userId }
   });
+
+  try {
+    // Fetch additional user info
+    console.log('🔍 Fetching user info...');
+    const userInfo = await fetchUserInfo(tpToken);
+    console.log('✅ User info fetched');
+
+    // Fetch vehicle list
+    console.log('🔍 Fetching vehicle list...');
+    const vehicles = await fetchVehicleList(tpToken);
+    console.log(`✅ Found ${vehicles.length} vehicles`);
+
+    if (existingUser) {
+      // Update existing user's tokens and info
+      await existingUser.update({
+        idToken,
+        accessToken: tpToken,
+        refreshToken,
+        expiresAt: new Date(Date.now() + expiresIn * 1000),
+        email: userInfo.email,
+        fullName: userInfo.full_name
+      });
+      console.log(`🔄 Updated tokens and info for existing user (${userId})`);
+
+      // Update or create vehicle entries
+      for (const vehicle of vehicles) {
+        const vehicleEntry = await VehicleToken.findOne({
+          where: { userId, vin: vehicle.vin }
+        });
+
+        if (vehicleEntry) {
+          await vehicleEntry.update({
+            vehicleId: vehicle.vehicle_id
+          });
+        } else {
+          await VehicleToken.create({
+            userId,
+            vin: vehicle.vin,
+            vehicleId: vehicle.vehicle_id,
+            email: userInfo.email,
+            fullName: userInfo.full_name,
+            idToken,
+            accessToken: tpToken,
+            refreshToken,
+            expiresAt: new Date(Date.now() + expiresIn * 1000)
+          });
+        }
+      }
+    } else {
+      // Create new user entries for each vehicle
+      for (const vehicle of vehicles) {
+        await VehicleToken.create({
+          userId,
+          vin: vehicle.vin,
+          vehicleId: vehicle.vehicle_id,
+          email: userInfo.email,
+          fullName: userInfo.full_name,
+          idToken,
+          accessToken: tpToken,
+          refreshToken,
+          expiresAt: new Date(Date.now() + expiresIn * 1000)
+        });
+      }
+
+      // If no vehicles, create a base user entry
+      if (vehicles.length === 0) {
+        await VehicleToken.create({
+          userId,
+          vin: null,
+          vehicleId: null,
+          email: userInfo.email,
+          fullName: userInfo.full_name,
+          idToken,
+          accessToken: tpToken,
+          refreshToken,
+          expiresAt: new Date(Date.now() + expiresIn * 1000)
+        });
+      }
+
+      console.log(`✨ Created new user entries (${userId}) with ${vehicles.length} vehicles`);
+    }
+  } catch (error) {
+    console.error('Failed to fetch additional info:', error);
+    // Still create/update the basic token entry even if additional info fetch fails
+    if (existingUser) {
+      await existingUser.update({
+        idToken,
+        accessToken: tpToken,
+        refreshToken,
+        expiresAt: new Date(Date.now() + expiresIn * 1000)
+      });
+    } else {
+      await VehicleToken.create({
+        userId,
+        vin: null,
+        vehicleId: null,
+        email: null,
+        fullName: null,
+        idToken,
+        accessToken: tpToken,
+        refreshToken,
+        expiresAt: new Date(Date.now() + expiresIn * 1000)
+      });
+    }
+    console.log(`⚠️ Created/updated basic token entry for ${userId} (additional info fetch failed)`);
+  }
 }
 
 // Helper function to update token environment file
@@ -1394,26 +2408,19 @@ router.get('/extractToken', async (req: Request, res: Response): Promise<void> =
     }
 
     // Extract user ID from idToken
-    const decodedToken = jwt.decode(idToken) as { [key: string]: any };
-    const { sub } = decodedToken;
+    const decodedToken = jwt.decode(idToken) as { sub: string };
+    if (!decodedToken?.sub) {
+      throw new Error('Missing sub claim in ID token');
+    }
 
     // Store tokens in database
     await storeTokens({
-      userIdSub: sub,
+      userId: decodedToken.sub,
       tpToken,
       refreshToken,
       idToken,
       expiresIn: tokenResponse.expires_in
     });
-
-    /* Commented out environment file update for fallback
-    try {
-      await updateTokenEnvFile({ tpToken, refreshToken, idToken });
-      console.log('✅ Token environment file updated with new tokens');
-    } catch (envError) {
-      console.error('⚠️ Failed to update token environment file:', envError);
-    }
-    */
 
     res.json({
       success: true,
@@ -1469,7 +2476,7 @@ export default router;
 import express, { Router, Request, Response } from 'express';
 import { config } from 'dotenv';
 import fetch from 'node-fetch';
-import { VehicleToken } from '../db';
+import { VehicleToken, refreshToken } from '../db';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -1489,6 +2496,69 @@ function signWithECKey(data: string): string {
   const sign = crypto.createSign('SHA256');
   sign.update(data);
   return sign.sign(privateKey, 'base64');
+}
+
+// Helper function to execute vehicle command with token refresh
+async function executeVehicleCommand(
+  vehicleToken: any,
+  vin: string,
+  command: string,
+  commandData: string
+): Promise<any> {
+  try {
+    const signature = signWithECKey(commandData);
+    
+    const response = await fetch(
+      `https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/${vin}/command/${command}`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${vehicleToken.accessToken}`,
+          'Content-Type': 'application/json',
+          'X-Signature': signature
+        },
+        body: commandData
+      }
+    );
+
+    // If unauthorized, try refreshing token and retry once
+    if (response.status === 401) {
+      console.log(`🔄 Token expired for ${vin}, attempting refresh...`);
+      const refreshSuccess = await refreshToken(vehicleToken);
+      
+      if (!refreshSuccess) {
+        throw new Error('Token refresh failed');
+      }
+
+      // Retry with new token
+      const retryResponse = await fetch(
+        `https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/${vin}/command/${command}`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${vehicleToken.accessToken}`,
+            'Content-Type': 'application/json',
+            'X-Signature': signature
+          },
+          body: commandData
+        }
+      );
+
+      if (!retryResponse.ok) {
+        throw new Error(`Command failed after token refresh: ${retryResponse.status} ${retryResponse.statusText}`);
+      }
+
+      return await retryResponse.json();
+    }
+
+    if (!response.ok) {
+      throw new Error(`Command failed: ${response.status} ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    throw error;
+  }
 }
 
 // Honk horn endpoint
@@ -1512,47 +2582,29 @@ router.post('/user/vehicles/honkHorn', async (req: Request, res: Response): Prom
       return;
     }
 
-    const accessToken = vehicleToken.get('accessToken');
-    const vehicleId = vehicleToken.get('vehicleId');
-
-    // Create and sign command data
+    // Create command data
     const commandData = JSON.stringify({
       command: 'honk_horn',
       vin: vin,
       timestamp: Date.now()
     });
 
-    const signature = signWithECKey(commandData);
-
-    const response = await fetch(`https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/${vin}/command/honk_horn`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'X-Signature': signature
-      },
-      body: commandData
-    });
-
-    if (!response.ok) {
-      console.error('Tesla API error:', response.status, response.statusText);
-      res.status(response.status).json({ error: 'Failed to honk horn via Tesla API' });
-      return;
-    }
-
-    const result = await response.json();
+    const result = await executeVehicleCommand(vehicleToken, vin, 'honk_horn', commandData);
+    
     console.log(`✅ Honked horn for vehicle ${vin} (user: ${userId}):`, result);
     
     res.json({
       user_id: userId,
       vin: vin,
-      result: result,
-      signature: signature
+      result: result
     });
 
   } catch (error) {
     console.error('Error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    });
   }
 });
 
@@ -1606,9 +2658,10 @@ export async function listVehicles(token: string) {
 </file>
 
 <file path="src/db.ts">
-import { Sequelize, DataTypes, Op } from "sequelize";
+import { Sequelize, DataTypes, Op, Model } from "sequelize";
 import dotenv from "dotenv";
 import fetch from 'node-fetch';
+import jwt from 'jsonwebtoken';
 dotenv.config();
 
 if (!process.env.DATABASE_URL) {
@@ -1636,9 +2689,23 @@ interface TokenResponse {
   expires_in: number;
 }
 
+interface VehicleTokenAttributes {
+  userId: string;
+  email: string | null;
+  fullName: string | null;
+  vin: string | null;
+  vehicleId: string | null;
+  idToken: string;
+  refreshToken: string;
+  accessToken: string;
+  expiresAt: Date;
+}
+
 // define VehicleTokens model
-export const VehicleToken = sequelize.define("VehicleToken", {
-  userId:      { type: DataTypes.STRING, allowNull: true },
+export const VehicleToken = sequelize.define<Model<VehicleTokenAttributes>>('VehicleToken', {
+  userId:      { type: DataTypes.STRING, allowNull: false },
+  email:       { type: DataTypes.STRING, allowNull: true },
+  fullName:    { type: DataTypes.STRING, allowNull: true },
   vin:         { type: DataTypes.STRING, allowNull: true },
   vehicleId:   { type: DataTypes.STRING, allowNull: true },
   idToken:     { type: DataTypes.TEXT,   allowNull: false },
@@ -1647,50 +2714,80 @@ export const VehicleToken = sequelize.define("VehicleToken", {
   expiresAt:   { type: DataTypes.DATE,   allowNull: false },
 }, {
   indexes: [
-    { unique: true, fields: ["userId", "vin"] }
+    { unique: true, fields: ["userId", "vin"] },
+    { unique: true, fields: ["userId"] },
+    { unique: true, fields: ["email"], where: { email: { [Op.ne]: null } } }
   ]
 });
 
+// Function to refresh a single token
+export async function refreshToken(token: Model<VehicleTokenAttributes>): Promise<boolean> {
+  try {
+    const tokenData = token.get();
+    const formData = new URLSearchParams();
+    formData.append('grant_type', 'refresh_token');
+    formData.append('client_id', process.env.CLIENT_ID!);
+    formData.append('client_secret', process.env.CLIENT_SECRET!);
+    formData.append('refresh_token', tokenData.refreshToken);
+
+    const response = await fetch('https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formData.toString()
+    });
+
+    if (!response.ok) {
+      throw new Error(`Token refresh failed: ${response.status} ${response.statusText}`);
+    }
+
+    const tokenResponse = await response.json() as TokenResponse;
+    
+    await token.update({
+      accessToken: tokenResponse.access_token,
+      refreshToken: tokenResponse.refresh_token,
+      expiresAt: new Date(Date.now() + tokenResponse.expires_in * 1000)
+    });
+
+    console.log(`🔄 Refreshed token for ${tokenData.userId}/${tokenData.vin}`);
+    return true;
+  } catch (e) {
+    console.error('Token refresh failed:', e);
+    return false;
+  }
+}
+
+// Function to refresh expired tokens
 export async function refreshExpired() {
   const now = new Date();
-  const rows = await VehicleToken.findAll({ where: { expiresAt: { [Op.lt]: now } } });
-
-  for (const row of rows as any[]) {
-    try {
-      const formData = new URLSearchParams();
-      formData.append('grant_type', 'refresh_token');
-      formData.append('client_id', process.env.CLIENT_ID!);
-      formData.append('client_secret', process.env.CLIENT_SECRET!);
-      formData.append('refresh_token', row.refreshToken);
-
-      const response = await fetch('https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData.toString()
-      });
-
-      if (!response.ok) {
-        throw new Error(`Token refresh failed: ${response.status} ${response.statusText}`);
-      }
-
-      const tokenResponse = await response.json() as TokenResponse;
-      
-      row.accessToken = tokenResponse.access_token;
-      row.refreshToken = tokenResponse.refresh_token;
-      row.expiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000);
-      await row.save();
-      console.log(`🔄  refreshed for ${row.userId}/${row.vin}`);
-    } catch (e) {
-      console.error('refresh failed for', row.userId, row.vin, e);
+  const rows = await VehicleToken.findAll({ 
+    where: { 
+      expiresAt: { [Op.lt]: now }
     }
+  });
+
+  console.log(`Found ${rows.length} expired tokens to refresh`);
+  
+  for (const row of rows) {
+    await refreshToken(row);
   }
 }
 
 // Initialize database
 export async function initialiseDb() {
-  // Force alter table to update constraints
-  await sequelize.sync({ alter: true });
-  console.log('Database synchronized and altered');
+  try {
+    // Sync tables
+    await sequelize.sync({ alter: true });
+    console.log('Database synchronized');
+    
+    // Start periodic token refresh (every 5 minutes)
+    setInterval(refreshExpired, 5 * 60 * 1000);
+    
+    // Also refresh on startup
+    await refreshExpired();
+  } catch (e) {
+    console.error('Database initialization failed:', e);
+    throw e;
+  }
 }
 </file>
 
@@ -4523,322 +5620,6 @@ if (process.argv.length > 2) {
 *.pem
 </file>
 
-<file path="analyze-oauth-vs-partner.js">
-#!/usr/bin/env node
-
-// Analyze OAuth vs Partner Token Generation
-require('dotenv').config({ path: './fleet.env' });
-
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const NGROK_DOMAIN = process.env.NGROK_DOMAIN;
-
-console.log('🔍 OAuth vs Partner Token Analysis');
-console.log('==================================');
-console.log('');
-
-console.log('📋 Same CLIENT_ID used in both flows:');
-console.log(`   CLIENT_ID: ${CLIENT_ID}`);
-console.log('');
-
-console.log('🔄 Partner Token Generation (WORKS):');
-console.log('   Endpoint: https://auth.tesla.com/oauth2/v3/token');
-console.log('   Method: POST');
-console.log('   Grant Type: client_credentials');
-console.log('   Audience: https://fleet-api.prd.na.vn.cloud.tesla.com');
-console.log('   Scope: openid vehicle_device_data vehicle_cmds vehicle_charging_cmds');
-console.log('   No redirect_uri needed');
-console.log('');
-
-console.log('❌ OAuth Flow (FAILS):');
-console.log('   Endpoint: https://auth.tesla.com/oauth2/v3/authorize');
-console.log('   Method: GET');
-console.log('   Grant Type: authorization_code');
-console.log('   Redirect URI: https://major-charmed-parakeet.ngrok-free.app/extractToken');
-console.log('   Scope: openid user_data offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds');
-console.log('');
-
-console.log('🔍 Key Differences:');
-console.log('');
-console.log('1. **Grant Type**:');
-console.log('   - Partner: client_credentials (server-to-server)');
-console.log('   - OAuth: authorization_code (user authorization)');
-console.log('');
-
-console.log('2. **Scope Differences**:');
-console.log('   - Partner: openid vehicle_device_data vehicle_cmds vehicle_charging_cmds');
-console.log('   - OAuth: openid user_data offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds');
-console.log('   - OAuth has additional scopes: user_data, offline_access');
-console.log('');
-
-console.log('3. **Redirect URI**:');
-console.log('   - Partner: Not required');
-console.log('   - OAuth: Required and must be pre-registered');
-console.log('');
-
-console.log('4. **Authentication Flow**:');
-console.log('   - Partner: Direct server authentication');
-console.log('   - OAuth: User consent flow');
-console.log('');
-
-console.log('💡 **Most Likely Causes**:');
-console.log('');
-console.log('1. **Missing OAuth Scopes**:');
-console.log('   Your Tesla app might not be approved for the additional OAuth scopes:');
-console.log('   - user_data');
-console.log('   - offline_access');
-console.log('   Try removing these scopes from the OAuth URL');
-console.log('');
-
-console.log('2. **OAuth vs Partner App Configuration**:');
-console.log('   Tesla might have separate configurations for:');
-console.log('   - Partner API access (what works)');
-console.log('   - OAuth user flows (what fails)');
-console.log('');
-
-console.log('3. **App Type Mismatch**:');
-console.log('   Your app might be configured for:');
-console.log('   - Server-to-server communication (partner tokens)');
-console.log('   - But not for user OAuth flows');
-console.log('');
-
-console.log('🔧 **Solutions to Try**:');
-console.log('');
-console.log('1. **Try OAuth with partner scopes only**:');
-const oauthPartnerScopes = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=user_id=test-user-id`;
-console.log(`   ${oauthPartnerScopes}`);
-console.log('');
-
-console.log('2. **Check Tesla Developer Portal for OAuth settings**:');
-console.log('   - Look for "OAuth Configuration" or "User Authorization" settings');
-console.log('   - Check if OAuth flows are enabled for your app');
-console.log('   - Verify OAuth scopes are approved');
-console.log('');
-
-console.log('3. **Contact Tesla Developer Support**:');
-console.log('   - Ask about OAuth vs Partner API configuration differences');
-console.log('   - Inquire about required app settings for user OAuth flows');
-console.log('');
-
-console.log('4. **Alternative: Use Partner Token Only**:');
-console.log('   - If OAuth continues to fail, you might be able to use');
-console.log('   - Partner tokens for vehicle commands without user OAuth');
-console.log('   - This depends on your specific use case');
-</file>
-
-<file path="comprehensive-oauth-test.js">
-#!/usr/bin/env node
-
-// Comprehensive OAuth Test Script
-require('dotenv').config({ path: './fleet.env' });
-
-const CLIENT_ID = process.env.CLIENT_ID;
-const NGROK_DOMAIN = process.env.NGROK_DOMAIN;
-
-console.log('🔍 Comprehensive OAuth Test');
-console.log('============================');
-console.log('');
-
-// Test 1: Basic OAuth URL (what you're currently using)
-console.log('1️⃣  Current OAuth URL:');
-const currentOauthUrl = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=user_id=test-user-id`;
-console.log(currentOauthUrl);
-console.log('');
-
-// Test 2: Alternative OAuth URL (without state parameter)
-console.log('2️⃣  OAuth URL without state parameter:');
-const oauthUrlNoState = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds`;
-console.log(oauthUrlNoState);
-console.log('');
-
-// Test 3: OAuth URL with different scope format
-console.log('3️⃣  OAuth URL with different scope format:');
-const oauthUrlAltScope = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid+user_data+offline_access+vehicle_device_data+vehicle_cmds+vehicle_charging_cmds&state=user_id=test-user-id`;
-console.log(oauthUrlAltScope);
-console.log('');
-
-// Test 4: OAuth URL with minimal scope
-console.log('4️⃣  OAuth URL with minimal scope:');
-const oauthUrlMinimalScope = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20vehicle_device_data%20vehicle_cmds&state=user_id=test-user-id`;
-console.log(oauthUrlMinimalScope);
-console.log('');
-
-// Test 5: OAuth URL with different redirect URI format
-console.log('5️⃣  OAuth URL with different redirect URI:');
-const oauthUrlAltRedirect = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(`https://${NGROK_DOMAIN}/extractToken`)}&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=user_id=test-user-id`;
-console.log(oauthUrlAltRedirect);
-console.log('');
-
-// Test 6: Check if there are any special characters in the client ID
-console.log('6️⃣  Client ID Analysis:');
-console.log(`   Raw CLIENT_ID: ${CLIENT_ID}`);
-console.log(`   Length: ${CLIENT_ID.length}`);
-console.log(`   Contains special chars: ${/[^a-zA-Z0-9-]/.test(CLIENT_ID)}`);
-console.log(`   Format check: ${/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(CLIENT_ID) ? 'Valid UUID format' : 'Not UUID format'}`);
-console.log('');
-
-// Test 7: Check ngrok domain format
-console.log('7️⃣  Ngrok Domain Analysis:');
-console.log(`   Raw NGROK_DOMAIN: ${NGROK_DOMAIN}`);
-console.log(`   Length: ${NGROK_DOMAIN.length}`);
-console.log(`   Contains ngrok-free.app: ${NGROK_DOMAIN.includes('ngrok-free.app')}`);
-console.log(`   Starts with https://: ${NGROK_DOMAIN.startsWith('https://')}`);
-console.log('');
-
-// Test 8: Alternative OAuth endpoints to try
-console.log('8️⃣  Alternative OAuth Endpoints:');
-console.log('   Standard: https://auth.tesla.com/oauth2/v3/authorize');
-console.log('   Alternative 1: https://auth.tesla.com/oauth2/authorize');
-console.log('   Alternative 2: https://auth.tesla.com/oauth2/v2/authorize');
-console.log('');
-
-// Test 9: Different response_type values
-console.log('9️⃣  Different response_type values to try:');
-console.log('   Current: response_type=code');
-console.log('   Alternative: response_type=token');
-console.log('');
-
-console.log('🔧 Additional Troubleshooting Steps:');
-console.log('');
-console.log('1. **Try different browsers**: Chrome, Firefox, Safari, Edge');
-console.log('2. **Clear browser cache and cookies**');
-console.log('3. **Try incognito/private browsing mode**');
-console.log('4. **Check if your Tesla account has Fleet API access**');
-console.log('5. **Verify your Tesla app is in the correct environment (dev/prod)**');
-console.log('6. **Check if there are any IP restrictions on your Tesla app**');
-console.log('7. **Try the OAuth URL from a different network/location**');
-console.log('8. **Check Tesla developer portal for any error messages or warnings**');
-console.log('9. **Verify your Tesla account email matches the one in your developer portal**');
-console.log('10. **Try creating a new Tesla app in the developer portal**');
-console.log('');
-console.log('💡 **Most Likely Issues**:');
-console.log('   - Tesla app environment mismatch (dev vs prod)');
-console.log('   - IP restrictions on your Tesla app');
-console.log('   - Tesla account not approved for Fleet API');
-console.log('   - Browser cache/cookie issues');
-console.log('   - Network/firewall blocking Tesla OAuth');
-</file>
-
-<file path="debug-oauth.sh">
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Tesla OAuth Debug Script
-# This script helps diagnose OAuth "unauthorized_client" errors
-
-echo "🔍 Tesla OAuth Debug Script"
-echo "============================"
-
-# --- load secrets ---
-ENV_FILE="$(dirname "$0")/fleet.env"
-if [[ -f $ENV_FILE ]]; then
-  echo "✅ Loading environment variables from: $ENV_FILE"
-  set -a
-  source "$ENV_FILE"
-  set +a
-else
-  echo "❌ Env file not found: $ENV_FILE" >&2
-  exit 1
-fi
-
-echo ""
-echo "📋 Current Configuration:"
-echo "   CLIENT_ID: $CLIENT_ID"
-echo "   NGROK_DOMAIN: $NGROK_DOMAIN"
-echo "   REDIRECT_URI: https://${NGROK_DOMAIN}/extractToken"
-echo ""
-
-# Test 1: Check if server is running
-echo "1️⃣  Checking server status..."
-if curl -s http://localhost:3000/health > /dev/null 2>&1; then
-  echo "✅ Server is running on localhost:3000"
-else
-  echo "❌ Server is not running"
-  echo "   Please start the server: cd tesla-fleet && npm start"
-  exit 1
-fi
-
-# Test 2: Check if ngrok domain is accessible
-echo ""
-echo "2️⃣  Checking ngrok domain accessibility..."
-if curl -s "https://${NGROK_DOMAIN}/health" > /dev/null 2>&1; then
-  echo "✅ Ngrok domain is accessible: https://${NGROK_DOMAIN}"
-else
-  echo "❌ Ngrok domain is not accessible: https://${NGROK_DOMAIN}"
-  echo "   Please check if ngrok is running: ngrok http 3000"
-  exit 1
-fi
-
-# Test 3: Test partner token generation (this should work even if OAuth doesn't)
-echo ""
-echo "3️⃣  Testing partner token generation..."
-TOKEN_RESPONSE=$(curl -s --request POST \
-  --header 'Content-Type: application/x-www-form-urlencoded' \
-  --data-urlencode 'grant_type=client_credentials' \
-  --data-urlencode "client_id=$CLIENT_ID" \
-  --data-urlencode "client_secret=$CLIENT_SECRET" \
-  --data-urlencode 'scope=openid vehicle_device_data vehicle_cmds vehicle_charging_cmds' \
-  --data-urlencode "audience=https://fleet-api.prd.na.vn.cloud.tesla.com" \
-  'https://auth.tesla.com/oauth2/v3/token')
-
-if echo "$TOKEN_RESPONSE" | grep -q "access_token"; then
-  echo "✅ Partner token generation successful"
-  echo "   This confirms your CLIENT_ID and CLIENT_SECRET are valid"
-else
-  echo "❌ Partner token generation failed"
-  echo "   Response: $TOKEN_RESPONSE"
-  echo "   This suggests your CLIENT_ID or CLIENT_SECRET may be incorrect"
-  exit 1
-fi
-
-# Test 4: Generate and display the exact OAuth URL
-echo ""
-echo "4️⃣  Generated OAuth URL:"
-OAUTH_URL="https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=user_id=test-user-id"
-echo "   $OAUTH_URL"
-echo ""
-
-# Test 5: Check if extractToken endpoint is accessible
-echo "5️⃣  Testing extractToken endpoint accessibility..."
-if curl -s "https://${NGROK_DOMAIN}/extractToken" > /dev/null 2>&1; then
-  echo "✅ extractToken endpoint is accessible"
-else
-  echo "❌ extractToken endpoint is not accessible"
-  echo "   This could be causing the OAuth redirect to fail"
-fi
-
-echo ""
-echo "🔧 Troubleshooting Steps:"
-echo ""
-echo "1. **Check Tesla Developer Portal Configuration:**"
-echo "   - Go to: https://developer.tesla.com/"
-echo "   - Find your app and check 'Allowed Redirect URIs'"
-echo "   - Make sure it includes: https://${NGROK_DOMAIN}/extractToken"
-echo "   - The URI must match EXACTLY (including /extractToken)"
-echo ""
-echo "2. **Verify App Status:**"
-echo "   - Check if your app is approved for Fleet API access"
-echo "   - Ensure your app is active and not suspended"
-echo ""
-echo "3. **Check Client ID:**"
-echo "   - Verify the CLIENT_ID in fleet.env matches your Tesla developer portal"
-echo "   - Make sure you're using the correct app's credentials"
-echo ""
-echo "4. **Common Issues:**"
-echo "   - Missing /extractToken in redirect URI"
-echo "   - Wrong ngrok domain in developer portal"
-echo "   - App not approved for Fleet API"
-echo "   - Using wrong client credentials"
-echo ""
-echo "5. **Test with Different Redirect URI:**"
-echo "   Try adding this to your Tesla developer portal:"
-echo "   https://${NGROK_DOMAIN}/extractToken"
-echo ""
-echo "6. **Alternative Test:**"
-echo "   Try the OAuth URL in an incognito/private browser window"
-echo "   Sometimes browser cache can cause issues"
-</file>
-
 <file path="directory.php">
 tesla-fleet/                      # ← repo root
 ├─ src/                           # TypeScript source
@@ -4938,11 +5719,11 @@ services:
     ports: 
       - "8443:443"
     volumes:
-      -./telemetry-config.json:/config/config.json:ro
-      -./telememtry-certs:/config/tls:ro
-    environment:
-      FLEET_TELEMETRY_CONFIG: /config/telemetry-config.json
-      SUPPRESS_TLS_HANDSHAKE_ERROR_LOGGING: "true"
+      - ./telemetry-config.json:/app/config.json:ro
+      - ./config:/config:ro
+    command:
+      - /fleet-telemetry
+      - -config=/app/config.json
   db:
     image: postgres:17
     container_name: tesla_tokens_db
@@ -5017,6 +5798,25 @@ RUN npm run build
 EXPOSE 3000
 
 CMD [ "npm", "run", "dev"]
+</file>
+
+<file path="nginx.conf">
+#uncomment this next line if you are NOT running nginx in docker
+#load_module /usr/lib/nginx/modules/ngx_stream_module.so;
+
+events {}
+
+stream {
+  upstream k3s_servers {
+    server 192.168.60.20:6443;
+    server 192.168.60.21:6443;
+  }
+
+  server {
+    listen 6443;
+    proxy_pass k3s_servers;
+  }
+}
 </file>
 
 <file path="package.json">
@@ -5182,341 +5982,21 @@ tesla-fleet/
 - All user authentication is handled via the official OAuth flow and access tokens.
 </file>
 
-<file path="revert-to-vehicle-id.sh">
-#!/bin/bash
-
-# Function to process a file
-process_file() {
-    local file="$1"
-    # Replace the variable name but keep the environment variable name
-    sed -i '' 's/const vin = process\.env\.VIN/const vin = process.env.TESLA_VEHICLE_ID/' "$file"
-    sed -i '' 's/${process\.env\.VIN}/${process.env.TESLA_VEHICLE_ID}/g' "$file"
-    sed -i '' 's/env\.VIN/env.TESLA_VEHICLE_ID/g' "$file"
-    echo "Reverted $file"
-}
-
-# Process all files in vehicleCommands
-for file in vehicleReq/vehicleCommands/*; do
-    if [ -f "$file" ]; then
-        process_file "$file"
-    fi
-done
-
-# Process all files in vehicleEndpoints
-for file in vehicleReq/vehicleEndpoints/*; do
-    if [ -f "$file" ]; then
-        process_file "$file"
-    fi
-done
-
-# Process all files in charging
-for file in vehicleReq/charging/*; do
-    if [ -f "$file" ]; then
-        process_file "$file"
-    fi
-done
-
-# Process mapsReq.js separately
-process_file "vehicleReq/mapsReq.js"
-
-echo "All files have been reverted to use TESLA_VEHICLE_ID instead of VIN"
-</file>
-
-<file path="setup-tesla-integration.sh">
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Tesla Fleet API Third-Party OAuth Setup Script
-# This script helps you set up and test the third-party (ownerapi) OAuth flow
-
-echo "🚗 Tesla Fleet API Third-Party OAuth Setup"
-echo "==========================================="
-
-# --- load secrets ---
-ENV_FILE="$(dirname "$0")/fleet.env"
-if [[ -f $ENV_FILE ]]; then
-  echo "✅ Loading environment variables from: $ENV_FILE"
-  set -a
-  source "$ENV_FILE"
-  set +a
-else
-  echo "❌ Env file not found: $ENV_FILE" >&2
-  exit 1
-fi
-
-# Check required variables
-if [[ -z "${NGROK_DOMAIN:-}" ]]; then
-  echo "❌ NGROK_DOMAIN is not set" >&2
-  exit 1
-fi
-
-echo "✅ Environment variables loaded successfully"
-echo "   NGROK_DOMAIN: $NGROK_DOMAIN"
-echo ""
-
-# Step 1: Check if server is running
-echo "1️⃣  Checking if server is running..."
-if curl -s http://localhost:3000/health > /dev/null 2>&1; then
-  echo "✅ Server is running on localhost:3000"
-else
-  echo "❌ Server is not running. Please start the server first:"
-  echo "   cd tesla-fleet && npm start"
-  exit 1
-fi
-
-# Step 2: Check if ngrok domain is accessible
-echo ""
-echo "2️⃣  Checking ngrok domain accessibility..."
-if curl -s "https://${NGROK_DOMAIN}/health" > /dev/null 2>&1; then
-  echo "✅ Ngrok domain is accessible: https://${NGROK_DOMAIN}"
-else
-  echo "❌ Ngrok domain is not accessible: https://${NGROK_DOMAIN}"
-  echo "   Please check if ngrok is running: ngrok http 3000"
-  exit 1
-fi
-
-# Step 2.5: Check if the Client ID has been imported correctly
-echo "2.5️⃣  Checking if the Client ID has been imported correctly..."
-echo "   Client ID: $CLIENT_ID"
-
-# Step 3: Remind user to register redirect URI
-echo ""
-echo "3️⃣  Register your redirect URI in the Tesla developer portal:"
-echo "   https://${NGROK_DOMAIN}/extractToken"
-echo "   (Go to your Tesla developer portal and add this as an allowed redirect URI)"
-echo ""
-
-# Step 4: Generate and display the OAuth URL for third-party flow
-echo "4️⃣  Generated OAuth URL (Third-Party):"
-RAND_STATE=$(openssl rand -hex 32)
-OAUTH_URL="https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/authorize?&client_id=${CLIENT_ID}&locale=en-US&prompt=login&redirect_uri=https%3A%2F%2F${NGROK_DOMAIN}%2FextractToken&response_type=code&scope=openid%20vehicle_device_data%20offline_access%20vehicle_cmds%20vehicle_location%20user_data&state=${RAND_STATE}"
-echo "   $OAUTH_URL"
-echo ""
-echo "   1. Open this URL in your browser"
-echo "   2. Log in and consent"
-echo "   3. Tesla will redirect to /extractToken with a code parameter"
-echo "   4. Your backend will exchange the code for tokens (handled automatically)"
-echo ""
-echo "🎉 Setup completed for Tesla third-party OAuth!"
-echo ""
-echo "📋 Next Steps:"
-echo "- Use the access token returned from /extractToken to call the Fleet API"
-echo "- See README.md for more details"
-echo ""
-</file>
-
 <file path="telemetry-config.json">
 {
     "host": "0.0.0.0",
     "port": 443,
     "log_level": "info",
     "json_log_enable": true,
-    "namespace": "myfleet",
-    "reliable_ack": true,
+    "namespace": "tesla",
+    "reliable_ack": false,
     "transmit_decoded_records": true,
-    "monitoring": {
-      "prometheus_metrics_port": 9090,
-      "profiler_port": 6060
-    },
+    "records": { "V": ["logger"], "alerts": ["logger"], "errors": ["logger"] },
     "tls": {
-      "server_cert": "/config/tls/server-cert.pem",
-      "server_key": "/config/tls/server-key.pem"
-    },
-    "records": {
-      "V": ["logger"],
-      "errors": ["logger"]
+      "server_cert": "/etc/certs/server/tls-cert.pem",
+      "server_key": "/etc/certs/server/tls-key.pem"
     }
   }
-</file>
-
-<file path="test-integration.js">
-#!/usr/bin/env node
-
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-
-// Load environment variables
-require('dotenv').config({ path: './fleet.env' });
-
-const NGROK_DOMAIN = process.env.NGROK_DOMAIN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
-
-console.log('🚗 Tesla Fleet API Integration Test\n');
-
-// Test 1: Check if server is running
-console.log('1️⃣  Testing server health...');
-try {
-  const healthResponse = execSync(`curl -s http://localhost:3000/health`, { encoding: 'utf8' });
-  console.log('✅ Server is running:', healthResponse.trim());
-} catch (error) {
-  console.log('❌ Server is not running. Please start the server first.');
-  process.exit(1);
-}
-
-// Test 2: Verify key files exist
-console.log('\n2️⃣  Verifying key files...');
-const privateKeyPath = path.join(__dirname, 'keys', 'private-key.pem');
-const publicKeyPath = path.join(__dirname, 'public', '.well-known', 'appspecific', 'com.tesla.3p.public-key.pem');
-
-if (fs.existsSync(privateKeyPath)) {
-  console.log('✅ Private key found:', privateKeyPath);
-} else {
-  console.log('❌ Private key not found:', privateKeyPath);
-}
-
-if (fs.existsSync(publicKeyPath)) {
-  console.log('✅ Public key found:', publicKeyPath);
-} else {
-  console.log('❌ Public key not found:', publicKeyPath);
-}
-
-// Test 3: Test key verification endpoint
-console.log('\n3️⃣  Testing key verification endpoint...');
-try {
-  const keyVerifyResponse = execSync(`curl -s https://${NGROK_DOMAIN}/user/vehicles/verify-keys`, { encoding: 'utf8' });
-  const keyVerifyData = JSON.parse(keyVerifyResponse);
-  console.log('✅ Key verification:', keyVerifyData);
-} catch (error) {
-  console.log('❌ Key verification failed:', error.message);
-}
-
-// Test 4: Test user registration (Step 7)
-console.log('\n4️⃣  Testing user registration...');
-try {
-  const registerResponse = execSync(`curl -s -X POST https://${NGROK_DOMAIN}/user/auth/register \
-    -H "Content-Type: application/json" \
-    -d '{"email": "rishabh.mohapatra@gmail.com", "password": "Tbf14&*7pr!7=^"}'`, { encoding: 'utf8' });
-  
-  const registerData = JSON.parse(registerResponse);
-  console.log('✅ User registered successfully:', registerData);
-  
-  if (registerData.user_id) {
-    console.log(`📝 User ID: ${registerData.user_id}`);
-    console.log(`📝 Save this user_id for the next steps!`);
-  }
-} catch (error) {
-  console.log('❌ User registration failed:', error.message);
-}
-
-// Test 5: Test OAuth URL generation (Step 9)
-console.log('\n5️⃣  Generating OAuth URL...');
-if (process.argv.includes('--user-id')) {
-  const userId = process.argv[process.argv.indexOf('--user-id') + 1];
-  const oauthUrl = `https://auth.tesla.com/oauth2/v3/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&scope=openid%20user_data%20offline_access%20vehicle_device_data%20vehicle_cmds%20vehicle_charging_cmds&state=user_id=${userId}`;
-  console.log('🔗 OAuth URL:', oauthUrl);
-  console.log('📝 Open this URL in your browser to complete OAuth flow');
-} else {
-  console.log('⚠️  Run with --user-id <YOUR_USER_ID> to generate OAuth URL');
-}
-
-// Test 6: Test vehicle pairing URL (Step 6)
-console.log('\n6️⃣  Vehicle pairing URL...');
-const pairingUrl = `https://tesla.com/_ak/${NGROK_DOMAIN}`;
-console.log('🔗 Vehicle pairing URL:', pairingUrl);
-console.log('📝 Open this URL on the same device as your Tesla mobile app');
-
-// Test 7: Test getVehicles endpoint (Step 10)
-console.log('\n7️⃣  Testing getVehicles endpoint...');
-if (process.argv.includes('--user-id')) {
-  const userId = process.argv[process.argv.indexOf('--user-id') + 1];
-  try {
-    const vehiclesResponse = execSync(`curl -s https://${NGROK_DOMAIN}/user/vehicles/getVehicles/${userId}`, { encoding: 'utf8' });
-    const vehiclesData = JSON.parse(vehiclesResponse);
-    console.log('✅ Vehicles retrieved:', vehiclesData);
-  } catch (error) {
-    console.log('❌ Failed to get vehicles:', error.message);
-  }
-} else {
-  console.log('⚠️  Run with --user-id <YOUR_USER_ID> to test getVehicles');
-}
-
-// Test 8: Test honk horn endpoint
-console.log('\n8️⃣  Testing honk horn endpoint...');
-if (process.argv.includes('--user-id') && process.argv.includes('--vin')) {
-  const userId = process.argv[process.argv.indexOf('--user-id') + 1];
-  const vin = process.argv[process.argv.indexOf('--vin') + 1];
-  try {
-    const honkResponse = execSync(`curl -s -X POST https://${NGROK_DOMAIN}/user/vehicles/honkHorn \
-      -H "Content-Type: application/json" \
-      -d '{"user_id": "${userId}", "vin": "${vin}"}'`, { encoding: 'utf8' });
-    const honkData = JSON.parse(honkResponse);
-    console.log('✅ Honk horn response:', honkData);
-  } catch (error) {
-    console.log('❌ Failed to honk horn:', error.message);
-  }
-} else {
-  console.log('⚠️  Run with --user-id <YOUR_USER_ID> --vin <YOUR_VIN> to test honk horn');
-}
-
-console.log('\n📋 Summary:');
-console.log('• Make sure your server is running on localhost:3000');
-console.log('• Make sure ngrok is running and pointing to localhost:3000');
-console.log('• Verify your key files are in the correct locations');
-console.log('• Update your Tesla developer portal with the ngrok domain');
-console.log('• Complete the OAuth flow to get user-specific tokens');
-console.log('• Pair your vehicle key using the pairing URL');
-console.log('• Test vehicle commands with your user_id and VIN');
-
-console.log('\n🔧 Usage examples:');
-console.log('node test-integration.js --user-id <YOUR_USER_ID>');
-console.log('node test-integration.js --user-id <YOUR_USER_ID> --vin <YOUR_VIN>');
-</file>
-
-<file path="test-oauth-url.js">
-#!/usr/bin/env node
-
-// Test OAuth URL Generation for Tesla Fleet API (official client_id)
-require('dotenv').config({ path: './fleet.env' });
-
-const CLIENT_ID = process.env.CLIENT_ID;
-const NGROK_DOMAIN = process.env.NGROK_DOMAIN;
-
-console.log('🔍 OAuth URL Test (Official Tesla Fleet API)');
-console.log('=================');
-console.log('');
-console.log('📋 Configuration:');
-console.log(`   CLIENT_ID: ${CLIENT_ID}`);
-console.log(`   NGROK_DOMAIN: ${NGROK_DOMAIN}`);
-console.log('');
-
-// Generate the exact OAuth URL for official flow
-const oauthUrl = `https://auth.tesla.com/oauth2/v3/authorize?client_id=${CLIENT_ID}&redirect_uri=https://${NGROK_DOMAIN}/extractToken&response_type=code&scope=openid%20email%20offline_access&state=test`;
-
-console.log('🔗 Generated OAuth URL:');
-console.log(oauthUrl);
-console.log('');
-
-// Break down the URL components
-console.log('📝 URL Components:');
-console.log(`   Base URL: https://auth.tesla.com/oauth2/v3/authorize`);
-console.log(`   response_type: code`);
-console.log(`   client_id: ${CLIENT_ID}`);
-console.log(`   redirect_uri: https://${NGROK_DOMAIN}/extractToken`);
-console.log(`   scope: openid email offline_access`);
-console.log(`   state: test`);
-console.log('');
-
-console.log('🔧 Troubleshooting Checklist:');
-console.log('');
-console.log('1. ✅ Register your redirect_uri in the Tesla developer portal');
-console.log('2. ✅ Use your official client_id for OAuth');
-console.log('3. ✅ Use scopes: openid email offline_access');
-console.log('4. ✅ Try the URL in an incognito browser window');
-console.log('');
-console.log('💡 This is the official Tesla Fleet API OAuth flow.');
-</file>
-
-<file path="tlskeygen.sh">
-openssl req -x509 -nodes -newkey ec \
-    -pkeyopt ec_paramgen_curve:secp384r1 \
-    -pkeyopt ec_param_enc:named_curve  \
-    -subj '/CN=localhost' \
-    -keyout config/tls-key.pem -out config/tls-cert.pem -sha256 -days 3650 \
-    -addext "extendedKeyUsage = serverAuth" \
-    -addext "keyUsage = digitalSignature, keyCertSign, keyAgreement"
 </file>
 
 <file path="tsconfig.json">
@@ -5636,44 +6116,40 @@ openssl req -x509 -nodes -newkey ec \
 }
 </file>
 
-<file path="update-vehicle-id.sh">
-#!/bin/bash
+<file path="values.yaml">
+# values.yaml
+replicaCount: 1
 
-# Function to process a file
-process_file() {
-    local file="$1"
-    # Replace the variable name but keep the environment variable name
-    sed -i '' 's/const vin = process\.env\.TESLA_VEHICLE_ID/const vin = process.env.VIN/' "$file"
-    sed -i '' 's/${process\.env\.TESLA_VEHICLE_ID}/${process.env.VIN}/g' "$file"
-    sed -i '' 's/env\.TESLA_VEHICLE_ID/env.VIN/g' "$file"
-    echo "Updated $file"
-}
+service:
+  type: LoadBalancer
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443    # chart default
 
-# Process all files in vehicleCommands
-for file in vehicleReq/vehicleCommands/*; do
-    if [ -f "$file" ]; then
-        process_file "$file"
-    fi
-done
+tlsSecret:
+  # Name of the Kubernetes TLS secret we created above
+  name: telemetry-tls
+  create: false
 
-# Process all files in vehicleEndpoints
-for file in vehicleReq/vehicleEndpoints/*; do
-    if [ -f "$file" ]; then
-        process_file "$file"
-    fi
-done
+config:
+  data:
+    host: "0.0.0.0"
+    port: 8443
+    log_level: "info"
+    json_log_enable: true
+    namespace: "tesla"
+    reliable_ack: false
+    transmit_decoded_records: true
+    records:
+      V: ["logger"]
+      alerts: ["logger"]
+      errors: ["logger"]
+    tls:
+      server_cert: "/etc/certs/server/tls-cert.pem"
+      server_key: "/etc/certs/server/tls-key.pem"
 
-# Process all files in charging
-for file in vehicleReq/charging/*; do
-    if [ -f "$file" ]; then
-        process_file "$file"
-    fi
-done
-
-# Process mapsReq.js separately
-process_file "vehicleReq/mapsReq.js"
-
-echo "All files have been updated to use VIN instead of TESLA_VEHICLE_ID"
+# No need to set server_cert/server_key here—Helm will mount the secret automatically
 </file>
 
 </files>

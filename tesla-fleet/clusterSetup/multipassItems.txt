@@ -1,0 +1,8 @@
+Name                    State             IPv4             Image
+agent-1                 Running           192.168.64.5     Ubuntu 22.04 LTS
+lb-1                    Running           192.168.64.6     Ubuntu 22.04 LTS
+lb-2                    Running           192.168.64.7     Ubuntu 22.04 LTS
+postgres-ha             Running           192.168.64.8     Ubuntu 22.04 LTS
+server-1                Running           192.168.64.2     Ubuntu 22.04 LTS
+server-2                Running           192.168.64.3     Ubuntu 22.04 LTS
+server-3                Running           192.168.64.4     Ubuntu 22.04 LTS

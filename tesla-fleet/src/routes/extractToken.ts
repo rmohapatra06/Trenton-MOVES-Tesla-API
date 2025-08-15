@@ -12,6 +12,8 @@ config({ path: path.join(__dirname, '../../fleet.env') });
 
 const router = Router();
 
+const BASE_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
+
 interface TokenResponse {
   access_token: string;
   refresh_token: string;
@@ -20,21 +22,173 @@ interface TokenResponse {
   expires_in: number;
 }
 
+interface UserInfo {
+  email: string;
+  full_name: string;
+}
+
+interface Vehicle {
+  vin: string;
+  id: string;
+  vehicle_id: string;
+}
+
+interface VehicleResponse {
+  response: Vehicle[];
+}
+
+// Helper function to fetch user info
+async function fetchUserInfo(accessToken: string): Promise<UserInfo> {
+  const response = await fetch(`${BASE_URL}/api/1/users/me`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch user info: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json() as UserInfo;
+  return data;
+}
+
+// Helper function to fetch vehicle list
+async function fetchVehicleList(accessToken: string): Promise<Vehicle[]> {
+  const response = await fetch(`${BASE_URL}/api/1/vehicles`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch vehicle list: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json() as VehicleResponse;
+  return data.response || [];
+}
+
 // helper
 async function storeTokens(
-  { userIdSub, tpToken, refreshToken, idToken, expiresIn }: {
-    userIdSub: string, tpToken: string, refreshToken: string,
+  { userId, tpToken, refreshToken, idToken, expiresIn }: {
+    userId: string, tpToken: string, refreshToken: string,
     idToken: string, expiresIn: number }
 ) {
-  await VehicleToken.upsert({
-    userId: userIdSub,
-    vin: null,  // No vehicle info for now
-    vehicleId: null,  // No vehicle info for now
-    idToken,
-    accessToken: tpToken,
-    refreshToken,
-    expiresAt: new Date(Date.now() + expiresIn * 1000),
+  // Check if user already exists first
+  const existingUser = await VehicleToken.findOne({
+    where: { userId }
   });
+
+  try {
+    // Fetch additional user info
+    console.log('🔍 Fetching user info...');
+    const userInfo = await fetchUserInfo(tpToken);
+    console.log('✅ User info fetched');
+
+    // Fetch vehicle list
+    console.log('🔍 Fetching vehicle list...');
+    const vehicles = await fetchVehicleList(tpToken);
+    console.log(`✅ Found ${vehicles.length} vehicles`);
+
+    if (existingUser) {
+      // Update existing user's tokens and info
+      await existingUser.update({
+        idToken,
+        accessToken: tpToken,
+        refreshToken,
+        expiresAt: new Date(Date.now() + expiresIn * 1000),
+        email: userInfo.email,
+        fullName: userInfo.full_name
+      });
+      console.log(`🔄 Updated tokens and info for existing user (${userId})`);
+
+      // Update or create vehicle entries
+      for (const vehicle of vehicles) {
+        const vehicleEntry = await VehicleToken.findOne({
+          where: { userId, vin: vehicle.vin }
+        });
+
+        if (vehicleEntry) {
+          await vehicleEntry.update({
+            vehicleId: vehicle.vehicle_id
+          });
+        } else {
+          await VehicleToken.create({
+            userId,
+            vin: vehicle.vin,
+            vehicleId: vehicle.vehicle_id,
+            email: userInfo.email,
+            fullName: userInfo.full_name,
+            idToken,
+            accessToken: tpToken,
+            refreshToken,
+            expiresAt: new Date(Date.now() + expiresIn * 1000)
+          });
+        }
+      }
+    } else {
+      // Create new user entries for each vehicle
+      for (const vehicle of vehicles) {
+        await VehicleToken.create({
+          userId,
+          vin: vehicle.vin,
+          vehicleId: vehicle.vehicle_id,
+          email: userInfo.email,
+          fullName: userInfo.full_name,
+          idToken,
+          accessToken: tpToken,
+          refreshToken,
+          expiresAt: new Date(Date.now() + expiresIn * 1000)
+        });
+      }
+
+      // If no vehicles, create a base user entry
+      if (vehicles.length === 0) {
+        await VehicleToken.create({
+          userId,
+          vin: null,
+          vehicleId: null,
+          email: userInfo.email,
+          fullName: userInfo.full_name,
+          idToken,
+          accessToken: tpToken,
+          refreshToken,
+          expiresAt: new Date(Date.now() + expiresIn * 1000)
+        });
+      }
+
+      console.log(`✨ Created new user entries (${userId}) with ${vehicles.length} vehicles`);
+    }
+  } catch (error) {
+    console.error('Failed to fetch additional info:', error);
+    // Still create/update the basic token entry even if additional info fetch fails
+    if (existingUser) {
+      await existingUser.update({
+        idToken,
+        accessToken: tpToken,
+        refreshToken,
+        expiresAt: new Date(Date.now() + expiresIn * 1000)
+      });
+    } else {
+      await VehicleToken.create({
+        userId,
+        vin: null,
+        vehicleId: null,
+        email: null,
+        fullName: null,
+        idToken,
+        accessToken: tpToken,
+        refreshToken,
+        expiresAt: new Date(Date.now() + expiresIn * 1000)
+      });
+    }
+    console.log(`⚠️ Created/updated basic token entry for ${userId} (additional info fetch failed)`);
+  }
 }
 
 // Helper function to update token environment file
@@ -146,26 +300,19 @@ router.get('/extractToken', async (req: Request, res: Response): Promise<void> =
     }
 
     // Extract user ID from idToken
-    const decodedToken = jwt.decode(idToken) as { [key: string]: any };
-    const { sub } = decodedToken;
+    const decodedToken = jwt.decode(idToken) as { sub: string };
+    if (!decodedToken?.sub) {
+      throw new Error('Missing sub claim in ID token');
+    }
 
     // Store tokens in database
     await storeTokens({
-      userIdSub: sub,
+      userId: decodedToken.sub,
       tpToken,
       refreshToken,
       idToken,
       expiresIn: tokenResponse.expires_in
     });
-
-    /* Commented out environment file update for fallback
-    try {
-      await updateTokenEnvFile({ tpToken, refreshToken, idToken });
-      console.log('✅ Token environment file updated with new tokens');
-    } catch (envError) {
-      console.error('⚠️ Failed to update token environment file:', envError);
-    }
-    */
 
     res.json({
       success: true,
